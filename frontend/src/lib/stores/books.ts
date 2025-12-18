@@ -1,4 +1,8 @@
 import { writable } from 'svelte/store';
+import { browser } from '$app/environment';
+
+const STORAGE_KEY = 'sveltereader-books';
+const EPUB_STORAGE_KEY = 'sveltereader-epubs';
 
 export interface Book {
 	id: string;
@@ -10,6 +14,7 @@ export interface Book {
 	currentPage: number;
 	lastRead?: Date;
 	annotations: Annotation[];
+	currentCfi?: string;
 }
 
 export interface Annotation {
@@ -23,67 +28,118 @@ export interface Annotation {
 	createdAt: Date;
 }
 
-function createBooksStore() {
-	const { subscribe, set, update } = writable<Book[]>([
-		{
-			id: '1',
-			title: 'The Great Gatsby',
-			author: 'F. Scott Fitzgerald',
-			progress: 45,
-			totalPages: 180,
-			currentPage: 81,
-			lastRead: new Date('2024-12-15'),
-			annotations: []
-		},
-		{
-			id: '2',
-			title: '1984',
-			author: 'George Orwell',
-			progress: 72,
-			totalPages: 328,
-			currentPage: 236,
-			lastRead: new Date('2024-12-17'),
-			annotations: []
-		},
-		{
-			id: '3',
-			title: 'Pride and Prejudice',
-			author: 'Jane Austen',
-			progress: 0,
-			totalPages: 279,
-			currentPage: 0,
-			annotations: []
+function loadBooksFromStorage(): Book[] {
+	if (!browser) return [];
+	try {
+		const stored = localStorage.getItem(STORAGE_KEY);
+		if (stored) {
+			const books = JSON.parse(stored);
+			return books.map((b: any) => ({
+				...b,
+				lastRead: b.lastRead ? new Date(b.lastRead) : undefined,
+				annotations: b.annotations.map((a: any) => ({
+					...a,
+					createdAt: new Date(a.createdAt)
+				}))
+			}));
 		}
-	]);
+	} catch (e) {
+		console.error('Failed to load books from storage:', e);
+	}
+	return [];
+}
+
+function saveBooksToStorage(books: Book[]) {
+	if (!browser) return;
+	try {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+	} catch (e) {
+		console.error('Failed to save books to storage:', e);
+	}
+}
+
+export async function storeEpubData(bookId: string, arrayBuffer: ArrayBuffer): Promise<void> {
+	if (!browser) return;
+	try {
+		const base64 = btoa(
+			new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+		);
+		localStorage.setItem(`${EPUB_STORAGE_KEY}-${bookId}`, base64);
+	} catch (e) {
+		console.error('Failed to store EPUB data:', e);
+	}
+}
+
+export async function getEpubData(bookId: string): Promise<ArrayBuffer | null> {
+	if (!browser) return null;
+	try {
+		const base64 = localStorage.getItem(`${EPUB_STORAGE_KEY}-${bookId}`);
+		if (!base64) return null;
+
+		const binaryString = atob(base64);
+		const bytes = new Uint8Array(binaryString.length);
+		for (let i = 0; i < binaryString.length; i++) {
+			bytes[i] = binaryString.charCodeAt(i);
+		}
+		return bytes.buffer;
+	} catch (e) {
+		console.error('Failed to get EPUB data:', e);
+		return null;
+	}
+}
+
+export function removeEpubData(bookId: string): void {
+	if (!browser) return;
+	try {
+		localStorage.removeItem(`${EPUB_STORAGE_KEY}-${bookId}`);
+	} catch (e) {
+		console.error('Failed to remove EPUB data:', e);
+	}
+}
+
+function createBooksStore() {
+	const initialBooks = loadBooksFromStorage();
+	const { subscribe, set, update } = writable<Book[]>(initialBooks);
 
 	return {
 		subscribe,
-		addBook: (book: Omit<Book, 'id' | 'annotations'>) => {
-			update((books) => [
-				...books,
-				{ ...book, id: crypto.randomUUID(), annotations: [] }
-			]);
+		addBook: (book: Omit<Book, 'id' | 'annotations'>): string => {
+			const id = crypto.randomUUID();
+			update((books) => {
+				const newBooks = [...books, { ...book, id, annotations: [] }];
+				saveBooksToStorage(newBooks);
+				return newBooks;
+			});
+			return id;
 		},
 		removeBook: (id: string) => {
-			update((books) => books.filter((b) => b.id !== id));
+			removeEpubData(id);
+			update((books) => {
+				const newBooks = books.filter((b) => b.id !== id);
+				saveBooksToStorage(newBooks);
+				return newBooks;
+			});
 		},
-		updateProgress: (id: string, currentPage: number) => {
-			update((books) =>
-				books.map((b) =>
+		updateProgress: (id: string, currentPage: number, currentCfi?: string) => {
+			update((books) => {
+				const newBooks = books.map((b) =>
 					b.id === id
 						? {
 								...b,
 								currentPage,
 								progress: Math.round((currentPage / b.totalPages) * 100),
-								lastRead: new Date()
+								lastRead: new Date(),
+								currentCfi: currentCfi ?? b.currentCfi
 							}
 						: b
-				)
-			);
+				);
+				saveBooksToStorage(newBooks);
+				return newBooks;
+			});
 		},
 		addAnnotation: (bookId: string, annotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'>) => {
-			update((books) =>
-				books.map((b) =>
+			update((books) => {
+				const newBooks = books.map((b) =>
 					b.id === bookId
 						? {
 								...b,
@@ -98,22 +154,31 @@ function createBooksStore() {
 								]
 							}
 						: b
-				)
-			);
+				);
+				saveBooksToStorage(newBooks);
+				return newBooks;
+			});
 		},
 		removeAnnotation: (bookId: string, annotationId: string) => {
-			update((books) =>
-				books.map((b) =>
+			update((books) => {
+				const newBooks = books.map((b) =>
 					b.id === bookId
 						? {
 								...b,
 								annotations: b.annotations.filter((a) => a.id !== annotationId)
 							}
 						: b
-				)
-			);
+				);
+				saveBooksToStorage(newBooks);
+				return newBooks;
+			});
 		},
-		reset: () => set([])
+		reset: () => {
+			set([]);
+			if (browser) {
+				localStorage.removeItem(STORAGE_KEY);
+			}
+		}
 	};
 }
 
