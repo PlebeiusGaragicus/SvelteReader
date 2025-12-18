@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Cyphertap } from 'cyphertap';
 	import { BookOpen } from '@lucide/svelte';
+	import { browser } from '$app/environment';
 </script>
 
 <header class="border-b border-border">
@@ -10,6 +11,10 @@
 			<span class="text-xl font-bold">SvelteReader</span>
 		</a>
 
-		<Cyphertap />
+		{#if browser}
+			<Cyphertap />
+		{:else}
+			<div class="h-9 w-9"></div>
+		{/if}
 	</div>
 </header>

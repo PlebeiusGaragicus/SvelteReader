@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { books, type Annotation } from '$lib/stores/books';
+	import { onMount, onDestroy } from 'svelte';
+	import { mode } from 'mode-watcher';
+	import { books, getEpubData, type Annotation } from '$lib/stores/books';
+	import { epubService, type TocItem, type LocationInfo } from '$lib/services/epubService';
 	import {
 		ChevronLeft,
 		ChevronRight,
@@ -11,7 +14,8 @@
 		Highlighter,
 		MessageSquare,
 		Trash2,
-		ArrowLeft
+		ArrowLeft,
+		Loader2
 	} from '@lucide/svelte';
 
 	const bookId = $derived($page.params.id);
@@ -20,6 +24,87 @@
 	let showTOC = $state(false);
 	let showAnnotations = $state(false);
 	let showSettings = $state(false);
+
+	let readerContainer: HTMLDivElement;
+	let isLoading = $state(true);
+	let loadError = $state<string | null>(null);
+	let toc = $state<TocItem[]>([]);
+	let currentLocation = $state<LocationInfo | null>(null);
+	let isBookReady = $state(false);
+
+	// Apply theme when mode changes
+	$effect(() => {
+		if (isBookReady && mode.current) {
+			epubService.applyTheme(mode.current === 'dark' ? 'dark' : 'light');
+		}
+	});
+
+	onMount(async () => {
+		if (!book) return;
+
+		try {
+			const epubData = await getEpubData(book.id);
+			if (!epubData) {
+				loadError = 'EPUB data not found. Please re-import the book.';
+				isLoading = false;
+				return;
+			}
+
+			await epubService.loadBook(epubData);
+			await epubService.renderBook(readerContainer, {
+				startCfi: book.currentCfi
+			});
+
+			// Apply initial theme based on current mode
+			const currentMode = mode.current || 'light';
+			epubService.applyTheme(currentMode === 'dark' ? 'dark' : 'light');
+			isBookReady = true;
+
+			// Load table of contents
+			toc = await epubService.getTableOfContents();
+
+			// Track location changes
+			epubService.onRelocated((location) => {
+				currentLocation = location;
+				// Save progress
+				books.updateProgress(book.id, location.page, location.cfi);
+			});
+
+			// Get initial location
+			currentLocation = epubService.getCurrentLocation();
+
+			isLoading = false;
+		} catch (error) {
+			console.error('Failed to load book:', error);
+			loadError = 'Failed to load book. Please try again.';
+			isLoading = false;
+		}
+	});
+
+	onDestroy(() => {
+		epubService.destroy();
+	});
+
+	async function handlePrevPage() {
+		await epubService.prevPage();
+	}
+
+	async function handleNextPage() {
+		await epubService.nextPage();
+	}
+
+	async function handleTocClick(item: TocItem) {
+		await epubService.goToHref(item.href);
+		showTOC = false;
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'ArrowLeft') {
+			handlePrevPage();
+		} else if (event.key === 'ArrowRight') {
+			handleNextPage();
+		}
+	}
 
 	function toggleOverlay(overlay: 'toc' | 'annotations' | 'settings') {
 		if (overlay === 'toc') {
@@ -35,12 +120,6 @@
 			showTOC = false;
 			showAnnotations = false;
 		}
-	}
-
-	function closeAllOverlays() {
-		showTOC = false;
-		showAnnotations = false;
-		showSettings = false;
 	}
 
 	function getColorClass(color: Annotation['color']) {
@@ -59,6 +138,8 @@
 		}
 	}
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 {#if !book}
 	<div class="flex h-[calc(100vh-3.5rem)] items-center justify-center">
@@ -107,39 +188,67 @@
 
 		<!-- Main Reading Area -->
 		<div class="relative flex flex-1 overflow-hidden">
-			<!-- EPUB Content Area (placeholder) -->
-			<div class="flex flex-1 items-center justify-center bg-background">
-				<div class="text-center text-muted-foreground">
-					<p class="text-lg">EPUB content will render here</p>
-					<p class="mt-2 text-sm">Integration with epub.js pending</p>
+			<!-- EPUB Content Area -->
+			{#if isLoading}
+				<div class="flex flex-1 items-center justify-center bg-background">
+					<div class="flex flex-col items-center gap-3 text-muted-foreground">
+						<Loader2 class="h-8 w-8 animate-spin" />
+						<p>Loading book...</p>
+					</div>
 				</div>
-			</div>
+			{:else if loadError}
+				<div class="flex flex-1 items-center justify-center bg-background">
+					<div class="text-center text-muted-foreground">
+						<p class="text-lg text-destructive">{loadError}</p>
+						<button
+							onclick={() => goto('/')}
+							class="mt-4 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+						>
+							Back to Library
+						</button>
+					</div>
+				</div>
+			{/if}
+			<div
+				bind:this={readerContainer}
+				class="epub-container flex-1 {isLoading || loadError ? 'hidden' : ''}"
+			></div>
 
 			<!-- Navigation Buttons -->
-			<button
-				class="absolute left-4 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-background/80 shadow-lg backdrop-blur hover:bg-background"
-				aria-label="Previous page"
-			>
-				<ChevronLeft class="h-6 w-6" />
-			</button>
-			<button
-				class="absolute right-4 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-background/80 shadow-lg backdrop-blur hover:bg-background"
-				aria-label="Next page"
-			>
-				<ChevronRight class="h-6 w-6" />
-			</button>
+			{#if !isLoading && !loadError}
+				<button
+					onclick={handlePrevPage}
+					class="absolute left-4 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-background/80 shadow-lg backdrop-blur hover:bg-background"
+					aria-label="Previous page"
+				>
+					<ChevronLeft class="h-6 w-6" />
+				</button>
+				<button
+					onclick={handleNextPage}
+					class="absolute right-4 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-background/80 shadow-lg backdrop-blur hover:bg-background"
+					aria-label="Next page"
+				>
+					<ChevronRight class="h-6 w-6" />
+				</button>
+			{/if}
 		</div>
 
 		<!-- Progress Bar -->
 		<div class="border-t border-border px-4 py-2">
 			<div class="flex items-center justify-between text-xs text-muted-foreground">
-				<span>{book.progress}%</span>
-				<span>Page {book.currentPage} of {book.totalPages}</span>
+				<span>{currentLocation?.percentage ?? book.progress}%</span>
+				<span>
+					{#if currentLocation}
+						Location {currentLocation.page} of {currentLocation.totalPages}
+					{:else}
+						Page {book.currentPage} of {book.totalPages}
+					{/if}
+				</span>
 			</div>
 			<div class="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
 				<div
 					class="h-full bg-primary transition-all"
-					style="width: {book.progress}%"
+					style="width: {currentLocation?.percentage ?? book.progress}%"
 				></div>
 			</div>
 		</div>
@@ -156,8 +265,29 @@
 						<X class="h-4 w-4" />
 					</button>
 				</div>
-				<nav class="overflow-y-auto p-2">
-					<p class="p-4 text-sm text-muted-foreground">Table of contents will load from EPUB</p>
+				<nav class="h-[calc(100%-4rem)] overflow-y-auto p-2">
+					{#if toc.length === 0}
+						<p class="p-4 text-sm text-muted-foreground">No table of contents available</p>
+					{:else}
+						{#each toc as item (item.id)}
+							<button
+								onclick={() => handleTocClick(item)}
+								class="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
+							>
+								{item.label}
+							</button>
+							{#if item.subitems}
+								{#each item.subitems as subitem (subitem.id)}
+									<button
+										onclick={() => handleTocClick(subitem)}
+										class="w-full rounded-md px-6 py-2 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+									>
+										{subitem.label}
+									</button>
+								{/each}
+							{/if}
+						{/each}
+					{/if}
 				</nav>
 			</div>
 		{/if}
