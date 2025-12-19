@@ -435,6 +435,7 @@
 				onClose={() => { showAIChat = false; aiChatAnnotation = null; }}
 				onNavigate={navigateToAnnotation}
 				initialAnnotation={aiChatAnnotation || undefined}
+				bookTitle={book.title}
 			/>
 		{/if}
 	</div>

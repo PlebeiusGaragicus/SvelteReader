@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ArrowLeft, Bot, Send, X } from '@lucide/svelte';
+	import { ArrowLeft, Bot, Send, X, AlertCircle } from '@lucide/svelte';
 	import type { Annotation } from '$lib/types';
+	import { sendMessageStream, checkBackendHealth, type PassageContext } from '$lib/services/chatService';
 
 	interface ChatMessage {
 		id: string;
 		role: 'user' | 'assistant';
 		content: string;
 		timestamp: Date;
+		isStreaming?: boolean;
 	}
 
 	interface Props {
@@ -15,22 +17,44 @@
 		onClose: () => void;
 		onNavigate: (annotation: Annotation) => void;
 		initialAnnotation?: Annotation; // Open directly to chat with this annotation
+		bookTitle?: string;
 	}
 
-	let { annotations, onClose, onNavigate, initialAnnotation }: Props = $props();
+	let { annotations, onClose, onNavigate, initialAnnotation, bookTitle }: Props = $props();
 	let panelElement: HTMLDivElement;
+	let messagesContainer = $state<HTMLDivElement | null>(null);
 
 	// Filter annotations that have notes (used as AI context)
 	const aiContextAnnotations = $derived(
 		annotations.filter(a => a.note)
 	);
 
+	// Derive initial view and annotation from props
+	const initialView = $derived(initialAnnotation ? 'chat' : 'list');
+	const initialSelected = $derived(initialAnnotation || null);
+
 	// View state: 'list' shows annotation contexts, 'chat' shows conversation
-	let currentView = $state<'list' | 'chat'>(initialAnnotation ? 'chat' : 'list');
-	let selectedAnnotation = $state<Annotation | null>(initialAnnotation || null);
+	let currentView = $state<'list' | 'chat'>('list');
+	let selectedAnnotation = $state<Annotation | null>(null);
+
+	// Sync with initial values when they change
+	$effect(() => {
+		currentView = initialView;
+		selectedAnnotation = initialSelected;
+	});
 	let chatMessages = $state<ChatMessage[]>([]);
 	let inputMessage = $state('');
 	let isLoading = $state(false);
+	let threadId = $state<string | null>(null);
+	let backendAvailable = $state<boolean | null>(null);
+	let streamingContent = $state('');
+
+	// Check backend availability on mount
+	onMount(() => {
+		checkBackendHealth().then(available => {
+			backendAvailable = available;
+		});
+	});
 
 	// Initialize chat if opened with an annotation
 	$effect(() => {
@@ -41,6 +65,13 @@
 				content: `I'm ready to discuss this passage:\n\n"${initialAnnotation.text}"\n\n${initialAnnotation.note ? `Your note: ${initialAnnotation.note}` : ''}\n\nWhat would you like to know?`,
 				timestamp: new Date()
 			}];
+		}
+	});
+
+	// Auto-scroll to bottom when messages change
+	$effect(() => {
+		if (messagesContainer && chatMessages.length > 0) {
+			messagesContainer.scrollTop = messagesContainer.scrollHeight;
 		}
 	});
 
@@ -65,6 +96,7 @@
 	function openChat(annotation: Annotation) {
 		selectedAnnotation = annotation;
 		currentView = 'chat';
+		threadId = null; // Reset thread for new conversation
 		// Initialize with context message
 		chatMessages = [{
 			id: crypto.randomUUID(),
@@ -78,6 +110,8 @@
 		currentView = 'list';
 		selectedAnnotation = null;
 		chatMessages = [];
+		threadId = null;
+		streamingContent = '';
 	}
 
 	async function sendMessage() {
@@ -91,20 +125,90 @@
 		};
 
 		chatMessages = [...chatMessages, userMessage];
+		const messageContent = inputMessage.trim();
 		inputMessage = '';
 		isLoading = true;
+		streamingContent = '';
 
-		// Simulate AI response (placeholder - will be replaced with actual API call)
-		setTimeout(() => {
-			const aiResponse: ChatMessage = {
+		// Build passage context from selected annotation
+		const passageContext: PassageContext | undefined = selectedAnnotation
+			? {
+					text: selectedAnnotation.text,
+					note: selectedAnnotation.note,
+					bookTitle: bookTitle,
+					chapter: selectedAnnotation.chapter,
+				}
+			: undefined;
+
+		// Add placeholder for streaming response
+		const streamingMessageId = crypto.randomUUID();
+		chatMessages = [...chatMessages, {
+			id: streamingMessageId,
+			role: 'assistant',
+			content: '',
+			timestamp: new Date(),
+			isStreaming: true
+		}];
+
+		try {
+			const result = await sendMessageStream(
+				{
+					content: messageContent,
+					threadId: threadId || undefined,
+					passageContext,
+				},
+				// onToken - update streaming content
+				(token) => {
+					streamingContent += token;
+					// Update the streaming message
+					chatMessages = chatMessages.map(msg =>
+						msg.id === streamingMessageId
+							? { ...msg, content: streamingContent }
+							: msg
+					);
+				},
+				// onComplete
+				(fullContent, messageId) => {
+					// Finalize the message
+					chatMessages = chatMessages.map(msg =>
+						msg.id === streamingMessageId
+							? { ...msg, content: fullContent || streamingContent, isStreaming: false }
+							: msg
+					);
+					isLoading = false;
+					streamingContent = '';
+				},
+				// onError
+				(error) => {
+					// Remove streaming message and show error
+					chatMessages = chatMessages.filter(msg => msg.id !== streamingMessageId);
+					chatMessages = [...chatMessages, {
+						id: crypto.randomUUID(),
+						role: 'assistant',
+						content: `Sorry, I encountered an error: ${error}. Please try again.`,
+						timestamp: new Date()
+					}];
+					isLoading = false;
+					streamingContent = '';
+				}
+			);
+
+			// Store thread ID for conversation continuity
+			if (result.threadId) {
+				threadId = result.threadId;
+			}
+		} catch (error) {
+			// Fallback error handling
+			chatMessages = chatMessages.filter(msg => msg.id !== streamingMessageId);
+			chatMessages = [...chatMessages, {
 				id: crypto.randomUUID(),
 				role: 'assistant',
-				content: 'This is a placeholder response. AI integration coming soon! The actual implementation will use your preferred AI service to discuss the selected passage.',
+				content: `Sorry, I couldn't connect to the AI service. Please make sure the backend is running.`,
 				timestamp: new Date()
-			};
-			chatMessages = [...chatMessages, aiResponse];
+			}];
 			isLoading = false;
-		}, 1000);
+			streamingContent = '';
+		}
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -197,16 +301,24 @@
 			</button>
 		</div>
 
+		<!-- Backend status warning -->
+		{#if backendAvailable === false}
+			<div class="mx-4 mt-2 flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-amber-600 dark:text-amber-400">
+				<AlertCircle class="h-4 w-4 flex-shrink-0" />
+				<p class="text-xs">Backend unavailable. Start the server to enable AI chat.</p>
+			</div>
+		{/if}
+
 		<!-- Chat messages -->
-		<div class="flex-1 overflow-y-auto p-4 space-y-4">
+		<div bind:this={messagesContainer} class="flex-1 overflow-y-auto p-4 space-y-4">
 			{#each chatMessages as message (message.id)}
 				<div class="flex {message.role === 'user' ? 'justify-end' : 'justify-start'}">
 					<div class="max-w-[85%] rounded-lg px-3 py-2 {message.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'}">
-						<p class="text-sm whitespace-pre-wrap">{message.content}</p>
+						<p class="text-sm whitespace-pre-wrap">{message.content || (message.isStreaming ? '...' : '')}</p>
 					</div>
 				</div>
 			{/each}
-			{#if isLoading}
+			{#if isLoading && !chatMessages.some(m => m.isStreaming)}
 				<div class="flex justify-start">
 					<div class="bg-muted rounded-lg px-3 py-2">
 						<div class="flex gap-1">
