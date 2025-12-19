@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.routers import chat
+from src.routers import chat, wallet
+from src.services.wallet import initialize_wallet
 
 load_dotenv()
 
@@ -45,6 +46,15 @@ app.add_middleware(
 
 # Include routers
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(wallet.router, prefix="/api/wallet", tags=["wallet"])
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup."""
+    print("[Startup] Initializing wallet service...")
+    await initialize_wallet()
+    print("[Startup] Wallet service ready")
 
 
 @app.get("/health")

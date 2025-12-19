@@ -14,7 +14,7 @@
 		onSave: (data: { color: AnnotationColor; note?: string; type: AnnotationType }) => void;
 		onDelete?: () => void;
 		onClose: () => void;
-		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string }) => void;
+		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string }) => void;
 	}
 
 	let { 
@@ -155,12 +155,13 @@
 		const text = annotation?.text || selectedText || '';
 		const range = annotation?.cfiRange || cfiRange || '';
 		const note = annotation?.note || noteText.trim() || undefined;
+		const existingThreadId = annotation?.chatThreadId;
 		
 		if (!isEditing) {
-			// For new selections, save as note first then open AI chat
-			onSave({ color: selectedColor, note: noteText.trim() || undefined, type: 'note' });
+			// For new selections, save as ai-chat type (blue underline)
+			onSave({ color: selectedColor, note: noteText.trim() || undefined, type: 'ai-chat' });
 		}
-		onOpenAIChat?.({ text, cfiRange: range, note });
+		onOpenAIChat?.({ text, cfiRange: range, note, threadId: existingThreadId });
 	}
 </script>
 

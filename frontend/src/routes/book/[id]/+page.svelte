@@ -55,6 +55,7 @@
 
 	// AI Chat state - passage context for the chat
 	let chatPassageContext = $state<PassageContext | null>(null);
+	let chatInitialThreadId = $state<string | null>(null);
 
 	// Wallet store for payment integration
 	const wallet = useWalletStore();
@@ -327,7 +328,31 @@
 		editingAnnotation = null;
 	}
 
-	function handleOpenAIChat(context: { text: string; cfiRange: string; note?: string }): void {
+	function handleChatThreadDelete(threadId: string): void {
+		if (!book) return;
+		
+		// Find annotations linked to this thread
+		const linkedAnnotations = book.annotations.filter(a => a.chatThreadId === threadId);
+		
+		for (const annotation of linkedAnnotations) {
+			// If annotation only has chat (no highlight color and no note), remove it entirely
+			if (annotation.type === 'ai-chat' && !annotation.note) {
+				epubService.removeHighlight(annotation.cfiRange);
+				books.removeAnnotation(book.id, annotation.id);
+			} else {
+				// Otherwise, just clear the chatThreadId and change type back to note/highlight
+				const newType = annotation.note ? 'note' : 'highlight';
+				books.updateAnnotation(book.id, annotation.id, { 
+					chatThreadId: undefined,
+					type: newType 
+				});
+				// Update the visual highlight
+				epubService.updateHighlight({ ...annotation, type: newType, chatThreadId: undefined });
+			}
+		}
+	}
+
+	function handleOpenAIChat(context: { text: string; cfiRange: string; note?: string; threadId?: string }): void {
 		// Set passage context for the new chat interface
 		chatPassageContext = {
 			text: context.text,
@@ -335,6 +360,9 @@
 			bookTitle: book?.title,
 			chapter: currentLocation?.chapter
 		};
+		
+		// If opening from an existing annotation with a thread, restore that thread
+		chatInitialThreadId = context.threadId || null;
 		
 		showAIChat = true;
 		textSelection = null;
@@ -440,14 +468,24 @@
 		{#if showAIChat}
 			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: var(--card); color: var(--card-foreground);">
 				<ChatThread
-					onClose={() => { showAIChat = false; chatPassageContext = null; }}
+					onClose={() => { showAIChat = false; chatPassageContext = null; chatInitialThreadId = null; }}
 					passageContext={chatPassageContext || undefined}
 					showHistory={true}
+					initialThreadId={chatInitialThreadId || undefined}
 					{generatePayment}
 					onThreadChange={(threadId) => {
-						// Could persist threadId to book metadata here if needed
+						// Update the annotation with the new thread ID if we have an editing annotation
+						if (editingAnnotation && threadId) {
+							const updatedAnnotation = { ...editingAnnotation.annotation, chatThreadId: threadId };
+							handleAnnotationSave({ 
+								color: updatedAnnotation.color, 
+								note: updatedAnnotation.note, 
+								type: 'ai-chat' 
+							});
+						}
 						console.log('Thread changed:', threadId);
 					}}
+					onThreadDelete={handleChatThreadDelete}
 				/>
 			</div>
 		{/if}

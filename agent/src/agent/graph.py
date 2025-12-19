@@ -175,24 +175,27 @@ async def validate_token_state(token: str) -> tuple[bool, str | None]:
     return True, None
 
 
-async def redeem_token_to_nutstash(token: str) -> bool:
-    """Redeem a Cashu token to the nutstash wallet."""
-    # TODO: this should be robust for a production environment
-    nutstash_url = os.getenv("NUTSTASH_URL", "http://localhost:3338")
+async def redeem_token_to_wallet(token: str) -> bool:
+    """Redeem a Cashu token to the backend wallet service."""
+    wallet_url = os.getenv("WALLET_URL", "http://localhost:8000/api/wallet")
     
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{nutstash_url}/api/receive",
+                f"{wallet_url}/receive",
                 json={"token": token},
                 timeout=30.0,
             )
             
             if response.status_code == 200:
                 result = response.json()
-                amount = result.get("amount", 0)
-                print(f"[Payment] Successfully redeemed {amount} sats to nutstash")
-                return True
+                if result.get("success"):
+                    amount = result.get("amount", 0)
+                    print(f"[Payment] Successfully redeemed {amount} sats to wallet")
+                    return True
+                else:
+                    print(f"[Payment] Wallet rejected token: {result.get('error')}")
+                    return False
             else:
                 print(f"[Payment] Failed to redeem: {response.text}")
                 return False
@@ -276,8 +279,8 @@ async def chat_node(state: AgentState) -> dict:
         
         # SUCCESS - Now redeem the token
         if token:
-            print("[Payment] Attempting to redeem token to nutstash...")
-            redeemed = await redeem_token_to_nutstash(token)
+            print("[Payment] Attempting to redeem token to wallet...")
+            redeemed = await redeem_token_to_wallet(token)
             if not redeemed:
                 # Redemption failed but LLM succeeded
                 # Log full token for manual recovery

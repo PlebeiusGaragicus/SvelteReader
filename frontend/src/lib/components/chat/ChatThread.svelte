@@ -21,10 +21,11 @@
 		showHistory?: boolean;
 		initialThreadId?: string;
 		onThreadChange?: (threadId: string | null) => void;
+		onThreadDelete?: (threadId: string) => void;
 		generatePayment?: () => Promise<PaymentInfo | null>;
 	}
 
-	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, generatePayment }: Props = $props();
+	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment }: Props = $props();
 
 	const chat = useChatStore();
 	const wallet = useWalletStore();
@@ -115,6 +116,8 @@
 
 	function handleDeleteThread(threadId: string) {
 		chat.deleteThread(threadId);
+		// Notify parent to clean up any annotations linked to this thread
+		onThreadDelete?.(threadId);
 	}
 
 	function goToHistory() {
