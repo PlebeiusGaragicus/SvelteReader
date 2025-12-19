@@ -1,0 +1,107 @@
+/**
+ * Chat Types - TypeScript interfaces for the LangGraph chat system
+ */
+
+import type { Message } from '@langchain/langgraph-sdk';
+
+export type MessageRole = 'human' | 'ai' | 'tool' | 'system';
+
+export interface ChatMessage {
+	id: string;
+	type: MessageRole;
+	content: string | MessageContent[];
+	name?: string;
+	tool_calls?: ToolCall[];
+	tool_call_id?: string;
+	timestamp?: Date;
+	isStreaming?: boolean;
+}
+
+export interface MessageContent {
+	type: 'text' | 'image_url' | 'file';
+	text?: string;
+	image_url?: { url: string };
+	file?: { url: string; mime_type: string };
+}
+
+export interface ToolCall {
+	id: string;
+	name: string;
+	args: Record<string, unknown>;
+}
+
+export interface ThreadInfo {
+	thread_id: string;
+	created_at?: string;
+	updated_at?: string;
+	metadata?: Record<string, unknown>;
+}
+
+export interface PassageContext {
+	text: string;
+	note?: string;
+	bookTitle?: string;
+	chapter?: string;
+}
+
+export interface PaymentInfo {
+	ecash_token: string;
+	amount_sats: number;
+	mint?: string;
+}
+
+export interface ChatSubmitInput {
+	messages: Message[];
+	context?: PassageContext;
+	payment?: PaymentInfo;
+}
+
+export interface StreamState {
+	messages: Message[];
+	ui?: UIMessage[];
+}
+
+export interface UIMessage {
+	id: string;
+	type: string;
+	content: unknown;
+}
+
+export interface ChatConfig {
+	apiUrl: string;
+	assistantId: string;
+	messageCostSats: number;
+}
+
+export const DEFAULT_CHAT_CONFIG: ChatConfig = {
+	apiUrl: 'http://localhost:2024',
+	assistantId: 'agent',
+	messageCostSats: 1,
+};
+
+export const DO_NOT_RENDER_ID_PREFIX = 'do-not-render-';
+
+export function isHumanMessage(message: ChatMessage): boolean {
+	return message.type === 'human';
+}
+
+export function isAIMessage(message: ChatMessage): boolean {
+	return message.type === 'ai';
+}
+
+export function isToolMessage(message: ChatMessage): boolean {
+	return message.type === 'tool';
+}
+
+export function shouldRenderMessage(message: ChatMessage): boolean {
+	return !message.id?.startsWith(DO_NOT_RENDER_ID_PREFIX);
+}
+
+export function getMessageText(message: ChatMessage): string {
+	if (typeof message.content === 'string') {
+		return message.content;
+	}
+	
+	const textContent = message.content.find(c => c.type === 'text');
+	return textContent?.text || '';
+}

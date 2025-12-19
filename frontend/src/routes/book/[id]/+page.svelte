@@ -16,9 +16,10 @@
 		AnnotationsPanel,
 		SettingsPanel,
 		ProgressBar,
-		AnnotationPopup,
-		AIChatPanel
+		AnnotationPopup
 	} from '$lib/components/reader';
+	import { ChatThread } from '$lib/components/chat';
+	import type { PassageContext } from '$lib/types/chat';
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
@@ -50,8 +51,8 @@
 	// Highlight edit state
 	let editingAnnotation = $state<{ annotation: Annotation; position: { x: number; y: number } } | null>(null);
 
-	// AI Chat state - which annotation to open chat with
-	let aiChatAnnotation = $state<Annotation | null>(null);
+	// AI Chat state - passage context for the chat
+	let chatPassageContext = $state<PassageContext | null>(null);
 
 	// Apply theme when mode changes
 	$effect(() => {
@@ -309,24 +310,13 @@
 	}
 
 	function handleOpenAIChat(context: { text: string; cfiRange: string; note?: string }): void {
-		// Find the annotation by cfiRange (it was just saved if new)
-		const annotation = book?.annotations.find(a => a.cfiRange === context.cfiRange);
-		aiChatAnnotation = annotation || null;
-		
-		// If annotation not found (race condition), create a temporary one for the chat
-		if (!aiChatAnnotation && context.text && context.cfiRange) {
-			aiChatAnnotation = {
-				id: 'temp-' + Date.now(),
-				bookId: book?.id || '',
-				cfiRange: context.cfiRange,
-				text: context.text,
-				note: context.note,
-				page: currentLocation?.page || 0,
-				color: 'yellow',
-				type: 'note',
-				createdAt: new Date()
-			};
-		}
+		// Set passage context for the new chat interface
+		chatPassageContext = {
+			text: context.text,
+			note: context.note,
+			bookTitle: book?.title,
+			chapter: currentLocation?.chapter
+		};
 		
 		showAIChat = true;
 		textSelection = null;
@@ -429,15 +419,14 @@
 			/>
 		{/if}
 
-		{#if showAIChat && book}
-			<AIChatPanel
-				annotations={book.annotations}
-				onClose={() => { showAIChat = false; aiChatAnnotation = null; }}
-				onNavigate={navigateToAnnotation}
-				onUpdateAnnotation={(annotationId, updates) => books.updateAnnotation(book.id, annotationId, updates)}
-				initialAnnotation={aiChatAnnotation || undefined}
-				bookTitle={book.title}
-			/>
+		{#if showAIChat}
+			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card shadow-lg">
+				<ChatThread
+					onClose={() => { showAIChat = false; chatPassageContext = null; }}
+					passageContext={chatPassageContext || undefined}
+					showHistory={true}
+				/>
+			</div>
 		{/if}
 	</div>
 {/if}
