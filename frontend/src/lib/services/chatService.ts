@@ -231,3 +231,25 @@ export async function checkBackendHealth(): Promise<boolean> {
 		return false;
 	}
 }
+
+export interface ThreadMessage {
+	id: string;
+	role: 'user' | 'assistant';
+	content: string;
+}
+
+/**
+ * Get the message history for a thread.
+ */
+export async function getThreadHistory(threadId: string): Promise<ThreadMessage[]> {
+	const response = await fetch(`${API_BASE_URL}/api/chat/thread/${threadId}/messages`, {
+		method: 'GET',
+	});
+
+	if (!response.ok) {
+		throw new Error('Failed to fetch thread history');
+	}
+
+	const data = await response.json();
+	return data.messages || [];
+}

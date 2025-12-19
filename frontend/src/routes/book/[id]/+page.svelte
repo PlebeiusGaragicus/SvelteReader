@@ -434,6 +434,7 @@
 				annotations={book.annotations}
 				onClose={() => { showAIChat = false; aiChatAnnotation = null; }}
 				onNavigate={navigateToAnnotation}
+				onUpdateAnnotation={(annotationId, updates) => books.updateAnnotation(book.id, annotationId, updates)}
 				initialAnnotation={aiChatAnnotation || undefined}
 				bookTitle={book.title}
 			/>

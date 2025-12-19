@@ -108,8 +108,9 @@ async def send_message_stream(message: ChatMessage):
             if not thread_id:
                 thread = await langgraph_client.create_thread()
                 thread_id = thread["thread_id"]
-                # Send thread_id first so client can track it
-                yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': thread_id})}\n\n"
+
+            # Always send thread_id so client can track it
+            yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': thread_id})}\n\n"
 
             # Prepare the input for the agent
             input_data = {
@@ -159,6 +160,16 @@ async def get_thread(thread_id: str):
     try:
         state = await langgraph_client.get_thread_state(thread_id)
         return state
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/thread/{thread_id}/messages")
+async def get_thread_messages(thread_id: str):
+    """Get the message history for a thread."""
+    try:
+        messages = await langgraph_client.get_thread_messages(thread_id)
+        return {"messages": messages}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

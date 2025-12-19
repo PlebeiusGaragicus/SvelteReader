@@ -53,6 +53,42 @@ class LangGraphClient:
         state = await self.client.threads.get_state(thread_id)
         return state
 
+    async def get_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
+        """Get the message history for a thread.
+
+        Args:
+            thread_id: ID of the thread
+
+        Returns:
+            List of messages in the thread
+        """
+        state = await self.client.threads.get_state(thread_id)
+        messages = []
+
+        # Extract messages from the state
+        if state and "values" in state and "messages" in state["values"]:
+            for msg in state["values"]["messages"]:
+                # Handle different message formats
+                if isinstance(msg, dict):
+                    msg_type = msg.get("type", "")
+                    content = msg.get("content", "")
+                    msg_id = msg.get("id", "")
+
+                    if msg_type == "human":
+                        messages.append({
+                            "id": msg_id,
+                            "role": "user",
+                            "content": content,
+                        })
+                    elif msg_type == "ai":
+                        messages.append({
+                            "id": msg_id,
+                            "role": "assistant",
+                            "content": content,
+                        })
+
+        return messages
+
     async def delete_thread(self, thread_id: str) -> None:
         """Delete a conversation thread.
 

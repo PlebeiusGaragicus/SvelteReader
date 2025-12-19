@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ArrowLeft, Bot, Send, X, AlertCircle } from '@lucide/svelte';
+	import { ArrowLeft, Bot, Send, X, AlertCircle, MessageSquare } from '@lucide/svelte';
 	import type { Annotation } from '$lib/types';
-	import { sendMessageStream, checkBackendHealth, type PassageContext } from '$lib/services/chatService';
+	import { sendMessageStream, checkBackendHealth, getThreadHistory, type PassageContext } from '$lib/services/chatService';
 
 	interface ChatMessage {
 		id: string;
@@ -16,11 +16,12 @@
 		annotations: Annotation[];
 		onClose: () => void;
 		onNavigate: (annotation: Annotation) => void;
+		onUpdateAnnotation?: (annotationId: string, updates: Partial<Annotation>) => void;
 		initialAnnotation?: Annotation; // Open directly to chat with this annotation
 		bookTitle?: string;
 	}
 
-	let { annotations, onClose, onNavigate, initialAnnotation, bookTitle }: Props = $props();
+	let { annotations, onClose, onNavigate, onUpdateAnnotation, initialAnnotation, bookTitle }: Props = $props();
 	let panelElement: HTMLDivElement;
 	let messagesContainer = $state<HTMLDivElement | null>(null);
 
@@ -48,6 +49,7 @@
 	let threadId = $state<string | null>(null);
 	let backendAvailable = $state<boolean | null>(null);
 	let streamingContent = $state('');
+	let isLoadingHistory = $state(false);
 
 	// Check backend availability on mount
 	onMount(() => {
@@ -58,15 +60,49 @@
 
 	// Initialize chat if opened with an annotation
 	$effect(() => {
-		if (initialAnnotation && chatMessages.length === 0) {
-			chatMessages = [{
-				id: crypto.randomUUID(),
-				role: 'assistant',
-				content: `I'm ready to discuss this passage:\n\n"${initialAnnotation.text}"\n\n${initialAnnotation.note ? `Your note: ${initialAnnotation.note}` : ''}\n\nWhat would you like to know?`,
-				timestamp: new Date()
-			}];
+		if (initialAnnotation && chatMessages.length === 0 && !isLoadingHistory) {
+			// Look up the latest version of the annotation from the store
+			// to get any updated chatThreadId
+			const latestAnnotation = annotations.find(a => a.id === initialAnnotation.id) || initialAnnotation;
+			loadChatForAnnotation(latestAnnotation);
 		}
 	});
+
+	// Load chat history for an annotation (if it has an existing thread)
+	async function loadChatForAnnotation(annotation: Annotation) {
+		threadId = annotation.chatThreadId || null;
+
+		if (annotation.chatThreadId) {
+			// Load existing chat history
+			isLoadingHistory = true;
+			try {
+				const history = await getThreadHistory(annotation.chatThreadId);
+				if (history.length > 0) {
+					chatMessages = history.map(msg => ({
+						id: msg.id || crypto.randomUUID(),
+						role: msg.role as 'user' | 'assistant',
+						content: msg.content,
+						timestamp: new Date()
+					}));
+					isLoadingHistory = false;
+					return;
+				}
+			} catch (error) {
+				console.error('Failed to load chat history:', error);
+				// Thread may have been deleted, clear the reference
+				threadId = null;
+			}
+			isLoadingHistory = false;
+		}
+
+		// No existing history, show welcome message
+		chatMessages = [{
+			id: crypto.randomUUID(),
+			role: 'assistant',
+			content: `I'm ready to discuss this passage:\n\n"${annotation.text}"\n\n${annotation.note ? `Your note: ${annotation.note}` : ''}\n\nWhat would you like to know?`,
+			timestamp: new Date()
+		}];
+	}
 
 	// Auto-scroll to bottom when messages change
 	$effect(() => {
@@ -96,14 +132,8 @@
 	function openChat(annotation: Annotation) {
 		selectedAnnotation = annotation;
 		currentView = 'chat';
-		threadId = null; // Reset thread for new conversation
-		// Initialize with context message
-		chatMessages = [{
-			id: crypto.randomUUID(),
-			role: 'assistant',
-			content: `I'm ready to discuss this passage:\n\n"${annotation.text}"\n\n${annotation.note ? `Your note: ${annotation.note}` : ''}\n\nWhat would you like to know?`,
-			timestamp: new Date()
-		}];
+		chatMessages = [];
+		loadChatForAnnotation(annotation);
 	}
 
 	function goBackToList() {
@@ -194,8 +224,12 @@
 			);
 
 			// Store thread ID for conversation continuity
-			if (result.threadId) {
+			if (result.threadId && result.threadId !== threadId) {
 				threadId = result.threadId;
+				// Persist thread ID to the annotation for future sessions
+				if (selectedAnnotation && onUpdateAnnotation) {
+					onUpdateAnnotation(selectedAnnotation.id, { chatThreadId: result.threadId });
+				}
 			}
 		} catch (error) {
 			// Fallback error handling
@@ -259,9 +293,16 @@
 						onclick={(e) => { e.stopPropagation(); openChat(annotation); }}
 						class="w-full rounded-lg border border-border p-3 mb-2 text-left hover:bg-accent transition-colors"
 					>
-						<p class="text-sm line-clamp-2 mb-1">
-							"{annotation.text.slice(0, 80)}{annotation.text.length > 80 ? '...' : ''}"
-						</p>
+						<div class="flex items-start justify-between gap-2">
+							<p class="text-sm line-clamp-2 mb-1 flex-1">
+								"{annotation.text.slice(0, 80)}{annotation.text.length > 80 ? '...' : ''}"
+							</p>
+							{#if annotation.chatThreadId}
+								<span title="Has chat history">
+									<MessageSquare class="h-4 w-4 text-blue-500 flex-shrink-0" />
+								</span>
+							{/if}
+						</div>
 						{#if annotation.note}
 							<p class="text-xs text-muted-foreground line-clamp-1">
 								Note: {annotation.note}

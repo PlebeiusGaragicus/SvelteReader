@@ -26,6 +26,7 @@ export interface Annotation {
 	color: AnnotationColor;
 	type: AnnotationType;
 	createdAt: Date;
+	chatThreadId?: string; // LangGraph thread ID for AI chat persistence
 }
 
 export type AnnotationColor = 'yellow' | 'green' | 'blue' | 'pink';
