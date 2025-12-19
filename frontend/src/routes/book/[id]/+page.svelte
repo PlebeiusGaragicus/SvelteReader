@@ -16,8 +16,8 @@
 		AnnotationsPanel,
 		SettingsPanel,
 		ProgressBar,
-		TextSelectionPopup,
-		AnnotationEditPopup
+		AnnotationPopup,
+		AIChatPanel
 	} from '$lib/components/reader';
 
 	const bookId = $derived($page.params.id);
@@ -27,6 +27,7 @@
 	let showTOC = $state(false);
 	let showAnnotations = $state(false);
 	let showSettings = $state(false);
+	let showAIChat = $state(false);
 
 	// Reader state
 	let readerContainer: HTMLDivElement;
@@ -48,6 +49,9 @@
 
 	// Highlight edit state
 	let editingAnnotation = $state<{ annotation: Annotation; position: { x: number; y: number } } | null>(null);
+
+	// AI Chat state - which annotation to open chat with
+	let aiChatAnnotation = $state<Annotation | null>(null);
 
 	// Apply theme when mode changes
 	$effect(() => {
@@ -147,6 +151,7 @@
 				showTOC = false;
 				showAnnotations = false;
 				showSettings = false;
+				showAIChat = false;
 				editingAnnotation = null;
 			});
 
@@ -230,9 +235,10 @@
 		}
 	}
 
-	function toggleOverlay(overlay: 'toc' | 'annotations' | 'settings'): void {
+	function toggleOverlay(overlay: 'toc' | 'annotations' | 'ai-chat' | 'settings'): void {
 		showTOC = overlay === 'toc' ? !showTOC : false;
 		showAnnotations = overlay === 'annotations' ? !showAnnotations : false;
+		showAIChat = overlay === 'ai-chat' ? !showAIChat : false;
 		showSettings = overlay === 'settings' ? !showSettings : false;
 	}
 
@@ -251,60 +257,42 @@
 		showAnnotations = false;
 	}
 
-	function handleHighlight(color: AnnotationColor, note?: string): void {
-		if (!book || !textSelection || !currentLocation) return;
+	// Unified handler for saving annotations (both new and editing)
+	function handleAnnotationSave(data: { color: AnnotationColor; note?: string; type: AnnotationType }): void {
+		if (!book || !currentLocation) return;
 
-		// Determine annotation type based on whether there's a note
-		const type: AnnotationType = note ? 'note' : 'highlight';
+		if (editingAnnotation) {
+			// Editing existing annotation
+			const updatedAnnotation = { ...editingAnnotation.annotation, ...data };
+			books.updateAnnotation(book.id, editingAnnotation.annotation.id, data);
+			epubService.updateHighlight(updatedAnnotation);
+			editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
+		} else if (textSelection) {
+			// Creating new annotation
+			const newAnnotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'> = {
+				cfiRange: textSelection.cfiRange,
+				text: textSelection.text,
+				note: data.note,
+				page: currentLocation.page,
+				color: data.color,
+				type: data.type
+			};
 
-		const newAnnotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'> = {
-			cfiRange: textSelection.cfiRange,
-			text: textSelection.text,
-			note,
-			page: currentLocation.page,
-			color,
-			type
-		};
+			books.addAnnotation(book.id, newAnnotation);
 
-		books.addAnnotation(book.id, newAnnotation);
+			epubService.addHighlight({
+				...newAnnotation,
+				id: '',
+				bookId: book.id,
+				createdAt: new Date()
+			} as Annotation);
 
-		// Add highlight to the rendered book
-		epubService.addHighlight({
-			...newAnnotation,
-			id: '', // Will be set by store
-			bookId: book.id,
-			createdAt: new Date()
-		} as Annotation);
-
-		epubService.clearSelection();
-		textSelection = null;
+			epubService.clearSelection();
+			textSelection = null;
+		}
 	}
 
-	function handleCloseSelectionPopup(): void {
-		epubService.clearSelection();
-		textSelection = null;
-	}
-
-	function handleUpdateAnnotationColor(color: AnnotationColor): void {
-		if (!book || !editingAnnotation) return;
-		
-		const updatedAnnotation = { ...editingAnnotation.annotation, color, type: 'highlight' as AnnotationType };
-		books.updateAnnotation(book.id, editingAnnotation.annotation.id, { color, type: 'highlight' });
-		epubService.updateHighlight(updatedAnnotation);
-		editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
-	}
-
-	function handleUpdateAnnotationNote(note: string | undefined): void {
-		if (!book || !editingAnnotation) return;
-		
-		const type: AnnotationType = note ? 'note' : 'highlight';
-		const updatedAnnotation = { ...editingAnnotation.annotation, note, type };
-		books.updateAnnotation(book.id, editingAnnotation.annotation.id, { note, type });
-		epubService.updateHighlight(updatedAnnotation);
-		editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
-	}
-
-	function handleDeleteEditingAnnotation(): void {
+	function handleAnnotationDelete(): void {
 		if (!book || !editingAnnotation) return;
 		
 		epubService.removeHighlight(editingAnnotation.annotation.cfiRange);
@@ -312,7 +300,36 @@
 		editingAnnotation = null;
 	}
 
-	function handleCloseEditPopup(): void {
+	function handlePopupClose(): void {
+		if (textSelection) {
+			epubService.clearSelection();
+			textSelection = null;
+		}
+		editingAnnotation = null;
+	}
+
+	function handleOpenAIChat(context: { text: string; cfiRange: string; note?: string }): void {
+		// Find the annotation by cfiRange (it was just saved if new)
+		const annotation = book?.annotations.find(a => a.cfiRange === context.cfiRange);
+		aiChatAnnotation = annotation || null;
+		
+		// If annotation not found (race condition), create a temporary one for the chat
+		if (!aiChatAnnotation && context.text && context.cfiRange) {
+			aiChatAnnotation = {
+				id: 'temp-' + Date.now(),
+				bookId: book?.id || '',
+				cfiRange: context.cfiRange,
+				text: context.text,
+				note: context.note,
+				page: currentLocation?.page || 0,
+				color: 'yellow',
+				type: 'note',
+				createdAt: new Date()
+			};
+		}
+		
+		showAIChat = true;
+		textSelection = null;
 		editingAnnotation = null;
 	}
 </script>
@@ -342,9 +359,11 @@
 			title={book.title}
 			{showTOC}
 			{showAnnotations}
+			{showAIChat}
 			{showSettings}
 			onToggleTOC={() => toggleOverlay('toc')}
 			onToggleAnnotations={() => toggleOverlay('annotations')}
+			onToggleAIChat={() => toggleOverlay('ai-chat')}
 			onToggleSettings={() => toggleOverlay('settings')}
 		/>
 
@@ -397,23 +416,25 @@
 			<SettingsPanel onClose={() => (showSettings = false)} />
 		{/if}
 
-		{#if textSelection}
-			<TextSelectionPopup
-				selectedText={textSelection.text}
-				position={textSelection.position}
-				onHighlight={handleHighlight}
-				onClose={handleCloseSelectionPopup}
+		{#if textSelection || editingAnnotation}
+			<AnnotationPopup
+				selectedText={textSelection?.text}
+				cfiRange={textSelection?.cfiRange}
+				annotation={editingAnnotation?.annotation}
+				position={editingAnnotation?.position || textSelection?.position || { x: 0, y: 0 }}
+				onSave={handleAnnotationSave}
+				onDelete={handleAnnotationDelete}
+				onClose={handlePopupClose}
+				onOpenAIChat={handleOpenAIChat}
 			/>
 		{/if}
 
-		{#if editingAnnotation}
-			<AnnotationEditPopup
-				annotation={editingAnnotation.annotation}
-				position={editingAnnotation.position}
-				onUpdateColor={handleUpdateAnnotationColor}
-				onUpdateNote={handleUpdateAnnotationNote}
-				onDelete={handleDeleteEditingAnnotation}
-				onClose={handleCloseEditPopup}
+		{#if showAIChat && book}
+			<AIChatPanel
+				annotations={book.annotations}
+				onClose={() => { showAIChat = false; aiChatAnnotation = null; }}
+				onNavigate={navigateToAnnotation}
+				initialAnnotation={aiChatAnnotation || undefined}
 			/>
 		{/if}
 	</div>

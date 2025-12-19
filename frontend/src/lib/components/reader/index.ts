@@ -6,3 +6,5 @@ export { default as SettingsPanel } from './SettingsPanel.svelte';
 export { default as ProgressBar } from './ProgressBar.svelte';
 export { default as TextSelectionPopup } from './TextSelectionPopup.svelte';
 export { default as AnnotationEditPopup } from './AnnotationEditPopup.svelte';
+export { default as AnnotationPopup } from './AnnotationPopup.svelte';
+export { default as AIChatPanel } from './AIChatPanel.svelte';
