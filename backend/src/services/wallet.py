@@ -6,14 +6,14 @@ This service uses the cashu library (nutshell) to:
 - Provide balance and sweep functionality
 """
 
-import asyncio
 import os
 from pathlib import Path
 from typing import Optional
 
-from cashu.core.base import TokenV4
 from cashu.core.settings import settings as cashu_settings
 from cashu.wallet.wallet import Wallet
+from cashu.wallet.helpers import deserialize_token_from_string, receive
+from cashu.core.helpers import sum_proofs
 
 
 class WalletService:
@@ -51,7 +51,7 @@ class WalletService:
         # Create wallet with the mint URL
         wallet = await Wallet.with_db(
             url=url,
-            db=str(self.db_path / "wallet"),
+            db=str(self.db_path),
             name="sveltereader",
         )
         
@@ -70,6 +70,7 @@ class WalletService:
         
         try:
             self._wallet = await self._get_or_create_wallet()
+            await self._wallet.load_proofs(reload=True)
             self._initialized = True
             print("[Wallet] Wallet initialized successfully")
             
@@ -103,28 +104,34 @@ class WalletService:
         except Exception as e:
             print(f"[Wallet] Failed to create sweep token: {e}")
 
-    async def receive_token(self, token: str) -> dict:
+    async def receive_token(self, token_str: str) -> dict:
         """Receive an ecash token and store the proofs.
 
         Args:
-            token: Cashu token string (cashuA... or cashuB...)
+            token_str: Cashu token string (cashuA... or cashuB...)
 
         Returns:
             dict with 'success', 'amount', and optionally 'error'
         """
         try:
-            # Parse the token to get the mint URL
-            token_obj = TokenV4.deserialize(token)
+            # Deserialize the token string to get Token object
+            token_obj = deserialize_token_from_string(token_str)
             mint_url = token_obj.mint
             
             print(f"[Wallet] Receiving token from mint: {mint_url}")
+            print(f"[Wallet] Token amount: {token_obj.amount} sats")
             
             # Get wallet for this mint
             wallet = await self._get_or_create_wallet(mint_url)
+            await wallet.load_proofs(reload=True)
             
-            # Receive the token (this redeems it with the mint and stores proofs)
-            amount = await wallet.receive(token)
+            # Use the receive helper which handles TokenV3/V4 and calls redeem
+            await receive(wallet, token_obj)
             
+            # Reload proofs to get updated balance
+            await wallet.load_proofs(reload=True)
+            
+            amount = token_obj.amount
             print(f"[Wallet] Successfully received {amount} sats")
             
             return {
@@ -151,7 +158,9 @@ class WalletService:
             await self.initialize()
             
         try:
-            balance = self._wallet.balance
+            await self._wallet.load_proofs(reload=True)
+            # available_balance excludes reserved proofs
+            balance = self._wallet.available_balance
             return balance
         except Exception as e:
             print(f"[Wallet] Failed to get balance: {e}")
@@ -170,13 +179,24 @@ class WalletService:
             await self.initialize()
             
         try:
-            balance = await self.get_balance()
+            await self._wallet.load_proofs(reload=True)
+            balance = self._wallet.available_balance
             if amount > balance:
                 print(f"[Wallet] Insufficient balance: {balance} < {amount}")
                 return None
-                
-            # Create send token
-            token, _ = await self._wallet.send(amount, memo="SvelteReader sweep")
+            
+            # Select proofs to send
+            send_proofs, fees = await self._wallet.select_to_send(
+                self._wallet.proofs,
+                amount,
+                set_reserved=False,
+            )
+            
+            # Serialize proofs to token string
+            token = await self._wallet.serialize_proofs(send_proofs)
+            
+            # Mark proofs as reserved (spent from our perspective)
+            await self._wallet.set_reserved_for_send(send_proofs, reserved=True)
             
             print(f"[Wallet] Created send token for {amount} sats")
             return token
