@@ -63,7 +63,7 @@
 		{#if chapters.length > 0}
 			<!-- Chapter segments (background track) -->
 			<div class="absolute inset-0 flex overflow-hidden rounded-full">
-				{#each chapters as chapter, i (chapter.href)}
+				{#each chapters as chapter, i (`${i}-${chapter.href}`)}
 					{@const width = chapter.endPercent - chapter.startPercent}
 					<button
 						class="h-full transition-all {hoveredChapter === chapter ? 'bg-muted-foreground/40' : 'bg-muted'}"
