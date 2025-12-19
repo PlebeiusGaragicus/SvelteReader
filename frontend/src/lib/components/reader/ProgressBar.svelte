@@ -1,3 +1,10 @@
+<!--
+	Progress bar with chapter segments.
+	- Segments are clickable to navigate to chapter start
+	- Segment widths reflect actual chapter length (when locations ready)
+	- Shows simple bar while chapters loading, segments after
+	- Uses composite key (index+href) to handle duplicate TOC entries in some ebooks
+-->
 <script lang="ts">
 	import type { LocationInfo } from '$lib/types';
 	import type { ChapterPosition } from '$lib/services/epubService';
@@ -7,9 +14,9 @@
 		fallbackProgress: number;
 		fallbackCurrentPage: number;
 		fallbackTotalPages: number;
-		chapters?: ChapterPosition[];
+		chapters?: ChapterPosition[]; // Empty array = show simple bar; populated = show segments
 		onChapterClick?: (href: string) => void;
-		lastLocationCfi?: string | null;
+		lastLocationCfi?: string | null; // If set, shows "return to last page" button
 		onReturnToLastLocation?: () => void;
 	}
 

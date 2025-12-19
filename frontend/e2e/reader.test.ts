@@ -132,6 +132,107 @@ test.describe('Book Import and Reading Flow', () => {
 	});
 });
 
+test.describe('Chapter Progress Bar', () => {
+	test.beforeEach(async ({ page }) => {
+		await page.goto('/');
+		await page.evaluate(() => {
+			localStorage.clear();
+			indexedDB.deleteDatabase('sveltereader');
+		});
+		await page.reload();
+		await page.waitForLoadState('networkidle');
+	});
+
+	test('progress bar shows percentage and location', async ({ page }) => {
+		// Import and open book
+		const fileInput = page.locator('input[type="file"]');
+		await fileInput.setInputFiles(SAMPLE_EPUB);
+		await expect(page.locator('[href^="/book/"]')).toBeVisible({ timeout: 20000 });
+		await page.locator('[href^="/book/"]').first().click();
+		await expect(page.getByRole('button', { name: /Next page/i })).toBeVisible({ timeout: 10000 });
+
+		// Progress bar should show percentage and location info
+		await expect(page.getByText(/%/)).toBeVisible();
+		await expect(page.getByText(/Location \d+ of \d+/)).toBeVisible();
+	});
+
+	test('chapter segments are rendered in DOM after locations ready', async ({ page }) => {
+		// Import and open book
+		const fileInput = page.locator('input[type="file"]');
+		await fileInput.setInputFiles(SAMPLE_EPUB);
+		await expect(page.locator('[href^="/book/"]')).toBeVisible({ timeout: 20000 });
+		await page.locator('[href^="/book/"]').first().click();
+		await expect(page.getByRole('button', { name: /Next page/i })).toBeVisible({ timeout: 10000 });
+
+		// Chapter segments should be attached to DOM after locations are ready
+		// Segments are buttons with aria-label "Go to [chapter name]"
+		const chapterSegment = page.locator('button[aria-label^="Go to"]').first();
+		await expect(chapterSegment).toBeAttached({ timeout: 15000 });
+		
+		// Verify the segment has the expected aria-label format
+		const ariaLabel = await chapterSegment.getAttribute('aria-label');
+		expect(ariaLabel).toMatch(/^Go to/); // aria-label may contain newlines from chapter name
+	});
+
+	test('clicking chapter segment triggers navigation and shows return button', async ({ page }) => {
+		// Import and open book
+		const fileInput = page.locator('input[type="file"]');
+		await fileInput.setInputFiles(SAMPLE_EPUB);
+		await expect(page.locator('[href^="/book/"]')).toBeVisible({ timeout: 20000 });
+		await page.locator('[href^="/book/"]').first().click();
+		await expect(page.getByRole('button', { name: /Next page/i })).toBeVisible({ timeout: 10000 });
+
+		// Navigate forward a few pages first so we have somewhere to return to
+		await page.getByRole('button', { name: /Next page/i }).click();
+		await page.waitForTimeout(500);
+		await page.getByRole('button', { name: /Next page/i }).click();
+		await page.waitForTimeout(500);
+
+		// Wait for chapter segments to be attached
+		const chapterSegments = page.locator('button[aria-label^="Go to"]');
+		await expect(chapterSegments.first()).toBeAttached({ timeout: 15000 });
+
+		// Click on a chapter segment using dispatchEvent (bypasses visibility)
+		const segmentCount = await chapterSegments.count();
+		const targetSegment = segmentCount > 1 ? chapterSegments.nth(1) : chapterSegments.first();
+		await targetSegment.dispatchEvent('click');
+
+		// "Return to last page" button should appear
+		await expect(page.getByRole('button', { name: /Return to last page/i })).toBeVisible({ timeout: 5000 });
+	});
+
+	test('return to last page button works', async ({ page }) => {
+		// Import and open book
+		const fileInput = page.locator('input[type="file"]');
+		await fileInput.setInputFiles(SAMPLE_EPUB);
+		await expect(page.locator('[href^="/book/"]')).toBeVisible({ timeout: 20000 });
+		await page.locator('[href^="/book/"]').first().click();
+		await expect(page.getByRole('button', { name: /Next page/i })).toBeVisible({ timeout: 10000 });
+
+		// Navigate forward
+		await page.getByRole('button', { name: /Next page/i }).click();
+		await page.waitForTimeout(500);
+		await page.getByRole('button', { name: /Next page/i }).click();
+		await page.waitForTimeout(500);
+
+		// Wait for chapter segments and click one
+		const chapterSegments = page.locator('button[aria-label^="Go to"]');
+		await expect(chapterSegments.first()).toBeAttached({ timeout: 15000 });
+		
+		const segmentCount = await chapterSegments.count();
+		const targetSegment = segmentCount > 1 ? chapterSegments.nth(1) : chapterSegments.first();
+		await targetSegment.dispatchEvent('click');
+
+		// Click return button
+		const returnButton = page.getByRole('button', { name: /Return to last page/i });
+		await expect(returnButton).toBeVisible({ timeout: 5000 });
+		await returnButton.click();
+
+		// Return button should disappear after clicking
+		await expect(returnButton).not.toBeVisible({ timeout: 2000 });
+	});
+});
+
 test.describe('Book Deletion', () => {
 	test.beforeEach(async ({ page }) => {
 		await page.goto('/');
