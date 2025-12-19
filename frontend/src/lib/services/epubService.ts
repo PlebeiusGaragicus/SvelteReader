@@ -1,5 +1,6 @@
 import ePub, { Book, Rendition } from 'epubjs';
 import type { NavItem } from 'epubjs';
+import { storeLocations, getLocations } from '$lib/services/storageService';
 
 export interface BookMetadata {
 	title: string;
@@ -32,6 +33,11 @@ class EpubService {
 	private book: Book | null = null;
 	private rendition: Rendition | null = null;
 	private totalLocations: number = 0;
+	private locationsReady: boolean = false;
+	private onLocationsReady: (() => void) | null = null;
+	private container: HTMLElement | null = null;
+	private resizeObserver: ResizeObserver | null = null;
+	private resizeTimeout: ReturnType<typeof setTimeout> | null = null;
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
 		const book = ePub(arrayBuffer);
@@ -97,33 +103,131 @@ class EpubService {
 
 	async renderBook(
 		container: HTMLElement,
-		options?: { width?: string; height?: string; startCfi?: string }
+		options?: { width?: string; height?: string; startCfi?: string; bookId?: string }
 	): Promise<Rendition> {
 		if (!this.book) {
 			throw new Error('No book loaded');
 		}
 
+		this.locationsReady = false;
+		this.container = container;
+
+		// Get exact pixel dimensions for proper pagination
+		const rect = container.getBoundingClientRect();
+		const width = Math.floor(rect.width);
+		const height = Math.floor(rect.height);
+
 		this.rendition = this.book.renderTo(container, {
-			width: options?.width || '100%',
-			height: options?.height || '100%',
+			width: width,
+			height: height,
 			flow: 'paginated',
 			spread: 'none',
-			minSpreadWidth: 99999,
 			allowScriptedContent: true
 		});
 
-		// Generate locations for accurate progress tracking
-		await this.book.locations.generate(1024);
-		this.totalLocations = this.book.locations.length();
+		// Register touch/swipe and keyboard handlers for content
+		this.setupContentHandlers();
 
-		// Display the book at the start or a specific CFI
+		// Setup resize observer for responsive behavior
+		this.setupResizeObserver(container);
+
+		// Display the book immediately (don't wait for locations)
 		if (options?.startCfi) {
 			await this.rendition.display(options.startCfi);
 		} else {
 			await this.rendition.display();
 		}
 
+		// Load or generate locations in background
+		this.loadLocationsAsync(options?.bookId);
+
 		return this.rendition;
+	}
+
+	private setupContentHandlers(): void {
+		if (!this.rendition) return;
+
+		// Handle keyboard events within the iframe
+		this.rendition.on('keyup', (event: KeyboardEvent) => {
+			if (event.key === 'ArrowLeft') {
+				this.prevPage();
+			} else if (event.key === 'ArrowRight') {
+				this.nextPage();
+			}
+		});
+	}
+
+	private setupResizeObserver(container: HTMLElement): void {
+		// Clean up existing observer
+		if (this.resizeObserver) {
+			this.resizeObserver.disconnect();
+		}
+
+		this.resizeObserver = new ResizeObserver((entries) => {
+			// Debounce resize events
+			if (this.resizeTimeout) {
+				clearTimeout(this.resizeTimeout);
+			}
+
+			this.resizeTimeout = setTimeout(() => {
+				const entry = entries[0];
+				if (entry && this.rendition) {
+					const width = Math.floor(entry.contentRect.width);
+					const height = Math.floor(entry.contentRect.height);
+					if (width > 0 && height > 0) {
+						this.rendition.resize(width, height);
+					}
+				}
+			}, 150);
+		});
+
+		this.resizeObserver.observe(container);
+	}
+
+	private async loadLocationsAsync(bookId?: string): Promise<void> {
+		if (!this.book) return;
+
+		try {
+			// Try to load cached locations first
+			if (bookId) {
+				const cachedLocations = await getLocations(bookId);
+				if (cachedLocations) {
+					this.book.locations.load(cachedLocations);
+					this.totalLocations = this.book.locations.length();
+					this.locationsReady = true;
+					this.onLocationsReady?.();
+					console.log('Loaded cached locations');
+					return;
+				}
+			}
+
+			// Generate locations in background
+			console.log('Generating locations...');
+			const locations = await this.book.locations.generate(1024);
+			this.totalLocations = this.book.locations.length();
+			this.locationsReady = true;
+			this.onLocationsReady?.();
+
+			// Cache the generated locations
+			if (bookId && locations) {
+				const locationsJson = this.book.locations.save();
+				await storeLocations(bookId, locationsJson);
+				console.log('Cached locations for future use');
+			}
+		} catch (e) {
+			console.error('Failed to load/generate locations:', e);
+		}
+	}
+
+	setOnLocationsReady(callback: () => void): void {
+		this.onLocationsReady = callback;
+		if (this.locationsReady) {
+			callback();
+		}
+	}
+
+	hasLocations(): boolean {
+		return this.locationsReady;
 	}
 
 	async getTableOfContents(): Promise<TocItem[]> {
@@ -173,15 +277,32 @@ class EpubService {
 		if (!location || !location.start) return null;
 
 		const cfi = location.start.cfi;
-		const locationIndex = this.book.locations.locationFromCfi(cfi) as unknown as number;
-		const percentage = locationIndex / this.totalLocations;
-		const page = Math.max(1, Math.ceil(percentage * this.totalLocations));
+
+		// If locations are ready, use accurate progress
+		if (this.locationsReady && this.totalLocations > 0) {
+			const locationIndex = this.book.locations.locationFromCfi(cfi) as unknown as number;
+			const percentage = locationIndex / this.totalLocations;
+			const page = Math.max(1, Math.ceil(percentage * this.totalLocations));
+
+			return {
+				cfi,
+				percentage: Math.round(percentage * 100),
+				page,
+				totalPages: this.totalLocations
+			};
+		}
+
+		// Fallback: estimate based on spine position
+		const spineIndex = location.start.index || 0;
+		const spine = (this.book.spine as any);
+		const spineLength = spine?.items?.length || spine?.length || 1;
+		const percentage = Math.round((spineIndex / spineLength) * 100);
 
 		return {
 			cfi,
-			percentage: Math.round(percentage * 100),
-			page,
-			totalPages: this.totalLocations
+			percentage,
+			page: spineIndex + 1,
+			totalPages: spineLength
 		};
 	}
 
@@ -199,29 +320,24 @@ class EpubService {
 	applyTheme(theme: 'light' | 'dark' | 'sepia'): void {
 		if (!this.rendition) return;
 
-		const themes: Record<string, Record<string, string>> = {
-			light: {
-				body: {
-					background: '#ffffff',
-					color: '#1a1a1a'
-				}
-			},
-			dark: {
-				body: {
-					background: '#1a1a1a',
-					color: '#e5e5e5'
-				}
-			},
-			sepia: {
-				body: {
-					background: '#f4ecd8',
-					color: '#5c4b37'
-				}
-			}
-		} as any;
+		const colors = {
+			light: { bg: '#ffffff', text: '#1a1a1a' },
+			dark: { bg: '#1a1a1a', text: '#e5e5e5' },
+			sepia: { bg: '#f4ecd8', text: '#5c4b37' }
+		};
 
-		this.rendition.themes.register('custom', themes[theme]);
-		this.rendition.themes.select('custom');
+		const { bg, text } = colors[theme];
+
+		// Use CSS override for better compatibility with scrolled-doc mode
+		this.rendition.themes.default({
+			'body': {
+				'background-color': `${bg} !important`,
+				'color': `${text} !important`
+			},
+			'p, div, span, h1, h2, h3, h4, h5, h6, li, a': {
+				'color': `${text} !important`
+			}
+		});
 	}
 
 	applyFontSize(size: number): void {
@@ -231,6 +347,14 @@ class EpubService {
 	}
 
 	destroy(): void {
+		if (this.resizeTimeout) {
+			clearTimeout(this.resizeTimeout);
+			this.resizeTimeout = null;
+		}
+		if (this.resizeObserver) {
+			this.resizeObserver.disconnect();
+			this.resizeObserver = null;
+		}
 		if (this.rendition) {
 			this.rendition.destroy();
 			this.rendition = null;
@@ -239,7 +363,10 @@ class EpubService {
 			this.book.destroy();
 			this.book = null;
 		}
+		this.container = null;
 		this.totalLocations = 0;
+		this.locationsReady = false;
+		this.onLocationsReady = null;
 	}
 }
 

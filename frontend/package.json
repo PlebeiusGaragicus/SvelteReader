@@ -29,6 +29,7 @@
 		"clsx": "^2.1.1",
 		"cyphertap": "file:../cyphertap",
 		"epubjs": "^0.3.93",
+		"idb": "^8.0.3",
 		"mode-watcher": "^1.1.0",
 		"svelte-sonner": "^1.0.7",
 		"tailwind-merge": "^3.4.0",

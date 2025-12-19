@@ -31,6 +31,7 @@
 	let toc = $state<TocItem[]>([]);
 	let currentLocation = $state<LocationInfo | null>(null);
 	let isBookReady = $state(false);
+	let locationsLoaded = $state(false);
 
 	// Apply theme when mode changes
 	$effect(() => {
@@ -40,6 +41,12 @@
 	});
 
 	onMount(async () => {
+		// Prevent rubber-banding/overscroll in reading mode
+		if (typeof document !== 'undefined') {
+			document.documentElement.classList.add('reading-mode');
+			document.body.classList.add('reading-mode');
+		}
+
 		if (!book) return;
 
 		try {
@@ -51,14 +58,17 @@
 			}
 
 			await epubService.loadBook(epubData);
+			
 			await epubService.renderBook(readerContainer, {
-				startCfi: book.currentCfi
+				startCfi: book.currentCfi,
+				bookId: book.id
 			});
 
 			// Apply initial theme based on current mode
 			const currentMode = mode.current || 'light';
 			epubService.applyTheme(currentMode === 'dark' ? 'dark' : 'light');
 			isBookReady = true;
+			isLoading = false;
 
 			// Load table of contents
 			toc = await epubService.getTableOfContents();
@@ -70,10 +80,14 @@
 				books.updateProgress(book.id, location.page, location.cfi);
 			});
 
-			// Get initial location
+			// Get initial location (approximate until locations are ready)
 			currentLocation = epubService.getCurrentLocation();
 
-			isLoading = false;
+			// Update location when accurate locations become available
+			epubService.setOnLocationsReady(() => {
+				locationsLoaded = true;
+				currentLocation = epubService.getCurrentLocation();
+			});
 		} catch (error) {
 			console.error('Failed to load book:', error);
 			loadError = 'Failed to load book. Please try again.';
@@ -82,6 +96,11 @@
 	});
 
 	onDestroy(() => {
+		// Remove scroll prevention
+		if (typeof document !== 'undefined') {
+			document.documentElement.classList.remove('reading-mode');
+			document.body.classList.remove('reading-mode');
+		}
 		epubService.destroy();
 	});
 
@@ -146,7 +165,7 @@
 		<p class="text-muted-foreground">Book not found</p>
 	</div>
 {:else}
-	<div class="relative flex h-[calc(100vh-3.5rem)] flex-col">
+	<div class="reader-page relative flex h-[calc(100vh-3.5rem)] flex-col">
 		<!-- Reader Header -->
 		<header class="flex items-center justify-between border-b border-border px-4 py-2">
 			<div class="flex items-center gap-2">
@@ -211,7 +230,8 @@
 			{/if}
 			<div
 				bind:this={readerContainer}
-				class="epub-container flex-1 {isLoading || loadError ? 'hidden' : ''}"
+				class="epub-container flex-1"
+				style:visibility={isLoading || loadError ? 'hidden' : 'visible'}
 			></div>
 
 			<!-- Navigation Buttons -->
