@@ -1,31 +1,126 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { books, type Annotation } from '$lib/stores/books';
-	import { PanelLeftClose, PanelLeft, List, MessageSquare, Highlighter, Trash2 } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { onMount, onDestroy } from 'svelte';
+	import { mode } from 'mode-watcher';
+	import { books, getEpubData, type Annotation } from '$lib/stores/books';
+	import { epubService, type TocItem, type LocationInfo } from '$lib/services/epubService';
+	import {
+		ChevronLeft,
+		ChevronRight,
+		List,
+		X,
+		Settings,
+		Highlighter,
+		MessageSquare,
+		Trash2,
+		ArrowLeft,
+		Loader2
+	} from '@lucide/svelte';
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
 
-	let sidebarOpen = $state(true);
-	let tocOpen = $state(false);
+	let showTOC = $state(false);
+	let showAnnotations = $state(false);
+	let showSettings = $state(false);
 
-	const sampleContent = `
-		<h2>Chapter 1</h2>
-		<p>In my younger and more vulnerable years my father gave me some advice that I've been turning over in my mind ever since.</p>
-		<p>"Whenever you feel like criticizing anyone," he told me, "just remember that all the people in this world haven't had the advantages that you've had."</p>
-		<p>He didn't say any more, but we've always been unusually communicative in a reserved way, and I understood that he meant a great deal more than that. In consequence, I'm inclined to reserve all judgments, a habit that has opened up many curious natures to me and also made me the victim of not a few veteran bores.</p>
-		<p>The abnormal mind is quick to detect and attach itself to this quality when it appears in a normal person, and so it came about that in college I was unjustly accused of being a politician, because I was privy to the secret griefs of wild, unknown men.</p>
-		<p>Most of the confidences were unsought — frequently I have feigned sleep, preoccupation, or a hostile levity when I realized by some unmistakable sign that an intimate revelation was quivering on the horizon; for the intimate revelations of young men, or at least the terms in which they express them, are usually plagiaristic and marred by obvious suppressions.</p>
-		<p>Reserving judgments is a matter of infinite hope. I am still a little afraid of missing something if I forget that, as my father snobbishly suggested, and I snobbishly repeat, a sense of the fundamental decencies is parcelled out unequally at birth.</p>
-	`;
+	let readerContainer: HTMLDivElement;
+	let isLoading = $state(true);
+	let loadError = $state<string | null>(null);
+	let toc = $state<TocItem[]>([]);
+	let currentLocation = $state<LocationInfo | null>(null);
+	let isBookReady = $state(false);
 
-	const tableOfContents = [
-		{ id: '1', title: 'Chapter 1: The Beginning', page: 1 },
-		{ id: '2', title: 'Chapter 2: The Journey', page: 25 },
-		{ id: '3', title: 'Chapter 3: The Discovery', page: 48 },
-		{ id: '4', title: 'Chapter 4: The Challenge', page: 72 },
-		{ id: '5', title: 'Chapter 5: The Resolution', page: 95 }
-	];
+	// Apply theme when mode changes
+	$effect(() => {
+		if (isBookReady && mode.current) {
+			epubService.applyTheme(mode.current === 'dark' ? 'dark' : 'light');
+		}
+	});
+
+	onMount(async () => {
+		if (!book) return;
+
+		try {
+			const epubData = await getEpubData(book.id);
+			if (!epubData) {
+				loadError = 'EPUB data not found. Please re-import the book.';
+				isLoading = false;
+				return;
+			}
+
+			await epubService.loadBook(epubData);
+			await epubService.renderBook(readerContainer, {
+				startCfi: book.currentCfi
+			});
+
+			// Apply initial theme based on current mode
+			const currentMode = mode.current || 'light';
+			epubService.applyTheme(currentMode === 'dark' ? 'dark' : 'light');
+			isBookReady = true;
+
+			// Load table of contents
+			toc = await epubService.getTableOfContents();
+
+			// Track location changes
+			epubService.onRelocated((location) => {
+				currentLocation = location;
+				// Save progress
+				books.updateProgress(book.id, location.page, location.cfi);
+			});
+
+			// Get initial location
+			currentLocation = epubService.getCurrentLocation();
+
+			isLoading = false;
+		} catch (error) {
+			console.error('Failed to load book:', error);
+			loadError = 'Failed to load book. Please try again.';
+			isLoading = false;
+		}
+	});
+
+	onDestroy(() => {
+		epubService.destroy();
+	});
+
+	async function handlePrevPage() {
+		await epubService.prevPage();
+	}
+
+	async function handleNextPage() {
+		await epubService.nextPage();
+	}
+
+	async function handleTocClick(item: TocItem) {
+		await epubService.goToHref(item.href);
+		showTOC = false;
+	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'ArrowLeft') {
+			handlePrevPage();
+		} else if (event.key === 'ArrowRight') {
+			handleNextPage();
+		}
+	}
+
+	function toggleOverlay(overlay: 'toc' | 'annotations' | 'settings') {
+		if (overlay === 'toc') {
+			showTOC = !showTOC;
+			showAnnotations = false;
+			showSettings = false;
+		} else if (overlay === 'annotations') {
+			showAnnotations = !showAnnotations;
+			showTOC = false;
+			showSettings = false;
+		} else if (overlay === 'settings') {
+			showSettings = !showSettings;
+			showTOC = false;
+			showAnnotations = false;
+		}
+	}
 
 	function getColorClass(color: Annotation['color']) {
 		const colors = {
@@ -44,86 +139,175 @@
 	}
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 {#if !book}
 	<div class="flex h-[calc(100vh-3.5rem)] items-center justify-center">
 		<p class="text-muted-foreground">Book not found</p>
 	</div>
 {:else}
-	<div class="flex h-[calc(100vh-3.5rem)]">
-		<!-- Table of Contents Sidebar -->
-		{#if tocOpen}
-			<aside class="w-64 shrink-0 border-r border-border bg-card p-4">
-				<div class="mb-4 flex items-center justify-between">
-					<h2 class="font-semibold">Contents</h2>
-					<button
-						onclick={() => (tocOpen = false)}
-						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-					>
-						<PanelLeftClose class="h-4 w-4" />
-					</button>
-				</div>
-				<nav class="space-y-1">
-					{#each tableOfContents as chapter}
-						<button
-							class="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
-						>
-							{chapter.title}
-						</button>
-					{/each}
-				</nav>
-			</aside>
-		{/if}
-
-		<!-- Main Reading Area -->
-		<div class="flex flex-1 flex-col overflow-hidden">
-			<!-- Reading Controls -->
-			<div class="flex items-center justify-between border-b border-border px-4 py-2">
-				<div class="flex items-center gap-2">
-					{#if !tocOpen}
-						<button
-							onclick={() => (tocOpen = true)}
-							class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-							aria-label="Open table of contents"
-						>
-							<List class="h-4 w-4" />
-						</button>
-					{/if}
-					<span class="text-sm text-muted-foreground">{book.title}</span>
-				</div>
-				<div class="flex items-center gap-2">
-					<span class="text-sm text-muted-foreground">
-						Page {book.currentPage} of {book.totalPages}
-					</span>
-					<button
-						onclick={() => (sidebarOpen = !sidebarOpen)}
-						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-						aria-label="Toggle annotations"
-					>
-						{#if sidebarOpen}
-							<PanelLeftClose class="h-4 w-4" />
-						{:else}
-							<PanelLeft class="h-4 w-4" />
-						{/if}
-					</button>
-				</div>
+	<div class="relative flex h-[calc(100vh-3.5rem)] flex-col">
+		<!-- Reader Header -->
+		<header class="flex items-center justify-between border-b border-border px-4 py-2">
+			<div class="flex items-center gap-2">
+				<button
+					onclick={() => goto('/')}
+					class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent"
+					aria-label="Back to library"
+				>
+					<ArrowLeft class="h-5 w-5" />
+				</button>
+				<button
+					onclick={() => toggleOverlay('toc')}
+					class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showTOC ? 'bg-accent' : ''}"
+					aria-label="Table of contents"
+				>
+					<List class="h-5 w-5" />
+				</button>
 			</div>
 
-			<!-- Book Content -->
-			<div class="flex-1 overflow-y-auto">
-				<article class="prose prose-neutral dark:prose-invert mx-auto max-w-2xl px-8 py-12">
-					{@html sampleContent}
-				</article>
+			<span class="text-sm font-medium">{book.title}</span>
+
+			<div class="flex items-center gap-2">
+				<button
+					onclick={() => toggleOverlay('annotations')}
+					class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showAnnotations ? 'bg-accent' : ''}"
+					aria-label="Annotations"
+				>
+					<Highlighter class="h-5 w-5" />
+				</button>
+				<button
+					onclick={() => toggleOverlay('settings')}
+					class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showSettings ? 'bg-accent' : ''}"
+					aria-label="Settings"
+				>
+					<Settings class="h-5 w-5" />
+				</button>
+			</div>
+		</header>
+
+		<!-- Main Reading Area -->
+		<div class="relative flex flex-1 overflow-hidden">
+			<!-- EPUB Content Area -->
+			{#if isLoading}
+				<div class="flex flex-1 items-center justify-center bg-background">
+					<div class="flex flex-col items-center gap-3 text-muted-foreground">
+						<Loader2 class="h-8 w-8 animate-spin" />
+						<p>Loading book...</p>
+					</div>
+				</div>
+			{:else if loadError}
+				<div class="flex flex-1 items-center justify-center bg-background">
+					<div class="text-center text-muted-foreground">
+						<p class="text-lg text-destructive">{loadError}</p>
+						<button
+							onclick={() => goto('/')}
+							class="mt-4 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+						>
+							Back to Library
+						</button>
+					</div>
+				</div>
+			{/if}
+			<div
+				bind:this={readerContainer}
+				class="epub-container flex-1 {isLoading || loadError ? 'hidden' : ''}"
+			></div>
+
+			<!-- Navigation Buttons -->
+			{#if !isLoading && !loadError}
+				<button
+					onclick={handlePrevPage}
+					class="absolute left-4 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-background/80 shadow-lg backdrop-blur hover:bg-background"
+					aria-label="Previous page"
+				>
+					<ChevronLeft class="h-6 w-6" />
+				</button>
+				<button
+					onclick={handleNextPage}
+					class="absolute right-4 top-1/2 -translate-y-1/2 inline-flex h-12 w-12 items-center justify-center rounded-full bg-background/80 shadow-lg backdrop-blur hover:bg-background"
+					aria-label="Next page"
+				>
+					<ChevronRight class="h-6 w-6" />
+				</button>
+			{/if}
+		</div>
+
+		<!-- Progress Bar -->
+		<div class="border-t border-border px-4 py-2">
+			<div class="flex items-center justify-between text-xs text-muted-foreground">
+				<span>{currentLocation?.percentage ?? book.progress}%</span>
+				<span>
+					{#if currentLocation}
+						Location {currentLocation.page} of {currentLocation.totalPages}
+					{:else}
+						Page {book.currentPage} of {book.totalPages}
+					{/if}
+				</span>
+			</div>
+			<div class="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">
+				<div
+					class="h-full bg-primary transition-all"
+					style="width: {currentLocation?.percentage ?? book.progress}%"
+				></div>
 			</div>
 		</div>
 
-		<!-- Annotations Sidebar -->
-		{#if sidebarOpen}
-			<aside class="w-80 shrink-0 border-l border-border bg-card">
-				<div class="border-b border-border p-4">
-					<h2 class="font-semibold">Annotations</h2>
-					<p class="mt-1 text-sm text-muted-foreground">
-						{book.annotations.length} {book.annotations.length === 1 ? 'note' : 'notes'}
-					</p>
+		<!-- Table of Contents Overlay -->
+		{#if showTOC}
+			<div class="absolute inset-y-0 left-0 top-[53px] z-10 w-72 border-r border-border bg-card shadow-lg">
+				<div class="flex items-center justify-between border-b border-border p-4">
+					<h2 class="font-semibold">Contents</h2>
+					<button
+						onclick={() => (showTOC = false)}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+					>
+						<X class="h-4 w-4" />
+					</button>
+				</div>
+				<nav class="h-[calc(100%-4rem)] overflow-y-auto p-2">
+					{#if toc.length === 0}
+						<p class="p-4 text-sm text-muted-foreground">No table of contents available</p>
+					{:else}
+						{#each toc as item (item.id)}
+							<button
+								onclick={() => handleTocClick(item)}
+								class="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
+							>
+								{item.label}
+							</button>
+							{#if item.subitems}
+								{#each item.subitems as subitem (subitem.id)}
+									<button
+										onclick={() => handleTocClick(subitem)}
+										class="w-full rounded-md px-6 py-2 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+									>
+										{subitem.label}
+									</button>
+								{/each}
+							{/if}
+						{/each}
+					{/if}
+				</nav>
+			</div>
+		{/if}
+
+		<!-- Annotations Overlay -->
+		{#if showAnnotations}
+			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card shadow-lg">
+				<div class="flex items-center justify-between border-b border-border p-4">
+					<div>
+						<h2 class="font-semibold">Annotations</h2>
+						<p class="text-sm text-muted-foreground">
+							{book.annotations.length} {book.annotations.length === 1 ? 'note' : 'notes'}
+						</p>
+					</div>
+					<button
+						onclick={() => (showAnnotations = false)}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+					>
+						<X class="h-4 w-4" />
+					</button>
 				</div>
 
 				<div class="h-[calc(100%-5rem)] overflow-y-auto p-4">
@@ -132,9 +316,7 @@
 							<div class="mb-3 rounded-full bg-muted p-3">
 								<Highlighter class="h-5 w-5 text-muted-foreground" />
 							</div>
-							<p class="text-sm text-muted-foreground">
-								Highlight text to add annotations
-							</p>
+							<p class="text-sm text-muted-foreground">Highlight text to add annotations</p>
 						</div>
 					{:else}
 						<div class="space-y-3">
@@ -161,7 +343,25 @@
 						</div>
 					{/if}
 				</div>
-			</aside>
+			</div>
+		{/if}
+
+		<!-- Settings Overlay -->
+		{#if showSettings}
+			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-72 border-l border-border bg-card shadow-lg">
+				<div class="flex items-center justify-between border-b border-border p-4">
+					<h2 class="font-semibold">Settings</h2>
+					<button
+						onclick={() => (showSettings = false)}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+					>
+						<X class="h-4 w-4" />
+					</button>
+				</div>
+				<div class="p-4">
+					<p class="text-sm text-muted-foreground">Reader settings (font size, theme, etc.) coming soon</p>
+				</div>
+			</div>
 		{/if}
 	</div>
 {/if}
