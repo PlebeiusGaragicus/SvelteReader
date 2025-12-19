@@ -47,6 +47,7 @@ class EpubService {
 	private resizeTimeout: ReturnType<typeof setTimeout> | null = null;
 	private selectionCallback: ((selection: TextSelection | null) => void) | null = null;
 	private highlightClickCallback: ((event: HighlightClickEvent | null) => void) | null = null;
+	private contentClickCallback: (() => void) | null = null;
 	private loadedAnnotations: Annotation[] = [];
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
@@ -209,8 +210,11 @@ class EpubService {
 			});
 		});
 
-		// Clear selection when clicking elsewhere
+		// Clear selection when clicking elsewhere and notify content click listeners
 		this.rendition.on('click', () => {
+			// Notify content click listeners (for closing panels/popups)
+			this.contentClickCallback?.();
+			
 			// Small delay to allow selection event to fire first
 			setTimeout(() => {
 				const contents = this.rendition?.getContents() as any;
@@ -521,6 +525,10 @@ class EpubService {
 		this.highlightClickCallback = callback;
 	}
 
+	onContentClicked(callback: () => void): void {
+		this.contentClickCallback = callback;
+	}
+
 	clearSelection(): void {
 		const contents = this.rendition?.getContents() as any;
 		if (contents && contents[0]) {
@@ -558,7 +566,7 @@ class EpubService {
 			const iframe = iframeWin?.frameElement as HTMLIFrameElement | null;
 			
 			let x = svgRect.left + svgRect.width / 2;
-			let y = svgRect.top;
+			let y = svgRect.top - 40; // Offset upward so popup appears above the highlight
 			
 			// If we found the iframe, add its offset
 			if (iframe) {

@@ -142,6 +142,14 @@
 				}
 			});
 
+			// Handle clicks inside epub content to close panels
+			epubService.onContentClicked(() => {
+				showTOC = false;
+				showAnnotations = false;
+				showSettings = false;
+				editingAnnotation = null;
+			});
+
 			// Update location and chapter positions when accurate locations become available
 			epubService.setOnLocationsReady(async () => {
 				console.log('Locations ready, recalculating chapters...');

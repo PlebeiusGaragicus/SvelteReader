@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { X } from '@lucide/svelte';
 	import type { TocItem } from '$lib/types';
 
@@ -9,9 +10,28 @@
 	}
 
 	let { toc, onClose, onItemClick }: Props = $props();
+	let panelElement: HTMLDivElement;
+
+	// Click outside to close
+	function handleClickOutside(event: MouseEvent) {
+		if (panelElement && !panelElement.contains(event.target as Node)) {
+			onClose();
+		}
+	}
+
+	onMount(() => {
+		const timeout = setTimeout(() => {
+			document.addEventListener('click', handleClickOutside);
+		}, 100);
+		
+		return () => {
+			clearTimeout(timeout);
+			document.removeEventListener('click', handleClickOutside);
+		};
+	});
 </script>
 
-<div class="toc-panel absolute inset-y-0 left-0 top-[53px] z-10 w-72 border-r border-border bg-card shadow-lg">
+<div bind:this={panelElement} class="toc-panel absolute inset-y-0 left-0 top-[53px] z-10 w-72 border-r border-border bg-card shadow-lg">
 	<div class="flex items-center justify-between border-b border-border p-4">
 		<h2 class="font-semibold">Contents</h2>
 		<button

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { X, Highlighter, MessageSquare, Trash2 } from '@lucide/svelte';
 	import type { Annotation, AnnotationColor, AnnotationType } from '$lib/types';
 
@@ -10,6 +11,25 @@
 	}
 
 	let { annotations, onClose, onDelete, onNavigate }: Props = $props();
+	let panelElement: HTMLDivElement;
+
+	// Click outside to close
+	function handleClickOutside(event: MouseEvent) {
+		if (panelElement && !panelElement.contains(event.target as Node)) {
+			onClose();
+		}
+	}
+
+	onMount(() => {
+		const timeout = setTimeout(() => {
+			document.addEventListener('click', handleClickOutside);
+		}, 100);
+		
+		return () => {
+			clearTimeout(timeout);
+			document.removeEventListener('click', handleClickOutside);
+		};
+	});
 
 	function getColorClass(color: AnnotationColor, type: AnnotationType): string {
 		if (type === 'note') {
@@ -28,7 +48,7 @@
 	}
 </script>
 
-<div class="annotations-panel absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card shadow-lg">
+<div bind:this={panelElement} class="annotations-panel absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card shadow-lg">
 	<div class="flex items-center justify-between border-b border-border p-4">
 		<div>
 			<h2 class="font-semibold">Annotations</h2>

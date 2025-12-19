@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { MessageSquare, Trash2, X } from '@lucide/svelte';
 	import type { Annotation, AnnotationColor } from '$lib/types';
 
@@ -15,10 +16,30 @@
 
 	let showNoteInput = $state(false);
 	let noteText = $state('');
+	let popupElement: HTMLDivElement;
 	
 	// Initialize noteText when annotation changes
 	$effect(() => {
 		noteText = annotation.note || '';
+	});
+
+	// Click outside to close
+	function handleClickOutside(event: MouseEvent) {
+		if (popupElement && !popupElement.contains(event.target as Node)) {
+			onClose();
+		}
+	}
+
+	onMount(() => {
+		// Delay adding listener to avoid immediate close from the click that opened the popup
+		const timeout = setTimeout(() => {
+			document.addEventListener('click', handleClickOutside);
+		}, 100);
+		
+		return () => {
+			clearTimeout(timeout);
+			document.removeEventListener('click', handleClickOutside);
+		};
 	});
 
 	const colors: { color: AnnotationColor; bg: string; ring: string }[] = [
@@ -92,6 +113,7 @@
 </script>
 
 <div
+	bind:this={popupElement}
 	class="annotation-edit-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
 	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%);"
 	role="dialog"
