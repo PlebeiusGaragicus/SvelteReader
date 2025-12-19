@@ -314,12 +314,42 @@ MINT_URL=https://mint.minibits.cash/Bitcoin
 
 4. **Token replay**: NUT-07 validation prevents replay attacks.
 
+## Known Issues & Fixes
+
+### CashuB Token Format (CBOR Encoding)
+
+**Issue**: Cashu tokens come in two formats:
+- `cashuA`: Base64url-encoded **JSON**
+- `cashuB`: Base64url-encoded **CBOR** (binary)
+
+The original implementation tried to parse all tokens as JSON, which failed for `cashuB` tokens with:
+```
+'utf-8' codec can't decode byte 0xa4 in position 0: invalid start byte
+```
+
+**Fix**: The agent now only validates the token format (prefix + valid base64url) without parsing the content. The actual token parsing and redemption is handled by nutstash, which supports both formats.
+
+```python
+def validate_token_format(token: str) -> bool:
+    """Validate token has correct prefix and is valid base64url."""
+    if not (token.startswith("cashuA") or token.startswith("cashuB")):
+        return False
+    
+    token_data = token[6:]
+    # Add padding and decode to verify it's valid base64url
+    decoded = base64.urlsafe_b64decode(token_data + "=" * (4 - len(token_data) % 4))
+    return len(decoded) >= 10
+```
+
+**Lesson**: Don't assume token content format. Validate structure, let the wallet handle parsing.
+
 ## Future Improvements
 
 1. **Spending conditions (NUT-10/11)**: Use P2PK or HTLC conditions for atomic swaps
 2. **Escrow service**: Third-party escrow for high-value transactions
 3. **Batch payments**: Pay for multiple messages in one token
 4. **Subscription model**: Prepaid message bundles
+5. **CBOR parsing**: Add proper CBOR library for full NUT-07 validation of cashuB tokens
 
 ## References
 
