@@ -5,8 +5,8 @@
 	import { mode } from 'mode-watcher';
 	import { books } from '$lib/stores/books';
 	import { getEpubData } from '$lib/services/storageService';
-	import { epubService, type ChapterPosition } from '$lib/services/epubService';
-	import type { TocItem, LocationInfo } from '$lib/types';
+	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
+	import type { TocItem, LocationInfo, AnnotationColor, AnnotationType, Annotation } from '$lib/types';
 	import { AppError, ERROR_MESSAGES } from '$lib/types';
 	import { Loader2 } from '@lucide/svelte';
 	import {
@@ -15,7 +15,9 @@
 		TocPanel,
 		AnnotationsPanel,
 		SettingsPanel,
-		ProgressBar
+		ProgressBar,
+		TextSelectionPopup,
+		AnnotationEditPopup
 	} from '$lib/components/reader';
 
 	const bookId = $derived($page.params.id);
@@ -40,6 +42,12 @@
 	// Return to last location state
 	let lastLocationCfi = $state<string | null>(null);
 	let returnTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	// Text selection state
+	let textSelection = $state<TextSelection | null>(null);
+
+	// Highlight edit state
+	let editingAnnotation = $state<{ annotation: Annotation; position: { x: number; y: number } } | null>(null);
 
 	// Apply theme when mode changes
 	$effect(() => {
@@ -99,6 +107,11 @@
 			isBookReady = true;
 			isLoading = false;
 
+			// Load existing annotations as highlights
+			if (book.annotations.length > 0) {
+				epubService.loadAnnotations(book.annotations);
+			}
+
 			// Load table of contents and chapter positions
 			toc = await epubService.getTableOfContents();
 			chapters = await epubService.getChapterPositions();
@@ -111,6 +124,23 @@
 
 			// Get initial location
 			currentLocation = epubService.getCurrentLocation();
+
+			// Handle text selection
+			epubService.onTextSelected((selection) => {
+				textSelection = selection;
+				// Close edit popup when making new selection
+				if (selection) {
+					editingAnnotation = null;
+				}
+			});
+
+			// Handle highlight clicks for editing
+			epubService.onHighlightClicked((event) => {
+				if (event) {
+					editingAnnotation = event;
+					textSelection = null; // Close selection popup
+				}
+			});
 
 			// Update location and chapter positions when accurate locations become available
 			epubService.setOnLocationsReady(async () => {
@@ -200,8 +230,82 @@
 
 	function deleteAnnotation(annotationId: string): void {
 		if (book) {
+			const annotation = book.annotations.find(a => a.id === annotationId);
+			if (annotation) {
+				epubService.removeHighlight(annotation.cfiRange);
+			}
 			books.removeAnnotation(book.id, annotationId);
 		}
+	}
+
+	function navigateToAnnotation(annotation: Annotation): void {
+		epubService.goToCfiWithHighlight(annotation.cfiRange);
+		showAnnotations = false;
+	}
+
+	function handleHighlight(color: AnnotationColor, note?: string): void {
+		if (!book || !textSelection || !currentLocation) return;
+
+		// Determine annotation type based on whether there's a note
+		const type: AnnotationType = note ? 'note' : 'highlight';
+
+		const newAnnotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'> = {
+			cfiRange: textSelection.cfiRange,
+			text: textSelection.text,
+			note,
+			page: currentLocation.page,
+			color,
+			type
+		};
+
+		books.addAnnotation(book.id, newAnnotation);
+
+		// Add highlight to the rendered book
+		epubService.addHighlight({
+			...newAnnotation,
+			id: '', // Will be set by store
+			bookId: book.id,
+			createdAt: new Date()
+		} as Annotation);
+
+		epubService.clearSelection();
+		textSelection = null;
+	}
+
+	function handleCloseSelectionPopup(): void {
+		epubService.clearSelection();
+		textSelection = null;
+	}
+
+	function handleUpdateAnnotationColor(color: AnnotationColor): void {
+		if (!book || !editingAnnotation) return;
+		
+		const updatedAnnotation = { ...editingAnnotation.annotation, color, type: 'highlight' as AnnotationType };
+		books.updateAnnotation(book.id, editingAnnotation.annotation.id, { color, type: 'highlight' });
+		epubService.updateHighlight(updatedAnnotation);
+		editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
+	}
+
+	function handleUpdateAnnotationNote(note: string | undefined): void {
+		if (!book || !editingAnnotation) return;
+		
+		const type: AnnotationType = note ? 'note' : 'highlight';
+		const updatedAnnotation = { ...editingAnnotation.annotation, note, type };
+		books.updateAnnotation(book.id, editingAnnotation.annotation.id, { note, type });
+		epubService.updateHighlight(updatedAnnotation);
+		editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
+	}
+
+	function handleDeleteEditingAnnotation(): void {
+		if (!book || !editingAnnotation) return;
+		
+		epubService.removeHighlight(editingAnnotation.annotation.cfiRange);
+		books.removeAnnotation(book.id, editingAnnotation.annotation.id);
+		editingAnnotation = null;
+	}
+
+	function handleCloseEditPopup(): void {
+		editingAnnotation = null;
 	}
 </script>
 
@@ -277,11 +381,32 @@
 				annotations={book.annotations}
 				onClose={() => (showAnnotations = false)}
 				onDelete={deleteAnnotation}
+				onNavigate={navigateToAnnotation}
 			/>
 		{/if}
 
 		{#if showSettings}
 			<SettingsPanel onClose={() => (showSettings = false)} />
+		{/if}
+
+		{#if textSelection}
+			<TextSelectionPopup
+				selectedText={textSelection.text}
+				position={textSelection.position}
+				onHighlight={handleHighlight}
+				onClose={handleCloseSelectionPopup}
+			/>
+		{/if}
+
+		{#if editingAnnotation}
+			<AnnotationEditPopup
+				annotation={editingAnnotation.annotation}
+				position={editingAnnotation.position}
+				onUpdateColor={handleUpdateAnnotationColor}
+				onUpdateNote={handleUpdateAnnotationNote}
+				onDelete={handleDeleteEditingAnnotation}
+				onClose={handleCloseEditPopup}
+			/>
 		{/if}
 	</div>
 {/if}

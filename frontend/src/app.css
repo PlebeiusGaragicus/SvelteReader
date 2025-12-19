@@ -97,3 +97,20 @@ html.reading-mode body {
 .epub-container iframe {
 	border: none !important;
 }
+
+/* Disable text selection on non-book UI elements for desktop-like feel */
+.no-select,
+.reader-page header,
+.reader-page nav,
+.toc-panel,
+.annotations-panel,
+.settings-panel,
+.progress-bar,
+.book-card,
+.library-header,
+.top-bar {
+	-webkit-user-select: none;
+	-moz-user-select: none;
+	-ms-user-select: none;
+	user-select: none;
+}

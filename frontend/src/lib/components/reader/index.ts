@@ -4,3 +4,5 @@ export { default as TocPanel } from './TocPanel.svelte';
 export { default as AnnotationsPanel } from './AnnotationsPanel.svelte';
 export { default as SettingsPanel } from './SettingsPanel.svelte';
 export { default as ProgressBar } from './ProgressBar.svelte';
+export { default as TextSelectionPopup } from './TextSelectionPopup.svelte';
+export { default as AnnotationEditPopup } from './AnnotationEditPopup.svelte';

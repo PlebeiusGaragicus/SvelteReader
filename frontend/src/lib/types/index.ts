@@ -13,14 +13,18 @@ export interface Book {
 	currentCfi?: string;
 }
 
+export type AnnotationType = 'highlight' | 'note' | 'ai-chat';
+
 export interface Annotation {
 	id: string;
 	bookId: string;
+	cfiRange: string;
 	text: string;
 	note?: string;
 	chapter?: string;
 	page: number;
 	color: AnnotationColor;
+	type: AnnotationType;
 	createdAt: Date;
 }
 

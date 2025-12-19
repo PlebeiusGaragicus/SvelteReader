@@ -20,7 +20,7 @@
 
 <a
 	href="/book/{book.id}"
-	class="group relative cursor-pointer rounded-lg border border-border bg-card transition-shadow hover:shadow-lg"
+	class="book-card group relative cursor-pointer rounded-lg border border-border bg-card transition-shadow hover:shadow-lg"
 >
 	<div class="relative aspect-[2/3] overflow-hidden rounded-t-lg bg-muted">
 		{#if book.coverUrl}

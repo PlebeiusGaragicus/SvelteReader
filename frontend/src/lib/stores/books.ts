@@ -139,6 +139,22 @@ function createBooksStore() {
 				return newBooks;
 			});
 		},
+		updateAnnotation: (bookId: string, annotationId: string, updates: Partial<Omit<Annotation, 'id' | 'bookId' | 'createdAt'>>) => {
+			update((books) => {
+				const newBooks = books.map((b) =>
+					b.id === bookId
+						? {
+								...b,
+								annotations: b.annotations.map((a) =>
+									a.id === annotationId ? { ...a, ...updates } : a
+								)
+							}
+						: b
+				);
+				saveBooksToStorage(newBooks);
+				return newBooks;
+			});
+		},
 		reset: () => {
 			set([]);
 			if (browser) {

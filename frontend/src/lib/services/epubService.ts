@@ -1,7 +1,7 @@
 import ePub, { Book, Rendition } from 'epubjs';
 import type { NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
-import type { BookMetadata, TocItem, LocationInfo } from '$lib/types';
+import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationType, AnnotationColor } from '$lib/types';
 import { AppError } from '$lib/types';
 
 // Re-export types for backward compatibility
@@ -25,6 +25,17 @@ const ESTIMATED_PAGES_PER_CHAPTER = 20;
 const MIN_ESTIMATED_PAGES = 100;
 const LOCATIONS_CHARS_PER_PAGE = 1024;
 
+export interface TextSelection {
+	text: string;
+	cfiRange: string;
+	position: { x: number; y: number };
+}
+
+export interface HighlightClickEvent {
+	annotation: Annotation;
+	position: { x: number; y: number };
+}
+
 class EpubService {
 	private book: Book | null = null;
 	private rendition: Rendition | null = null;
@@ -34,6 +45,9 @@ class EpubService {
 	private container: HTMLElement | null = null;
 	private resizeObserver: ResizeObserver | null = null;
 	private resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+	private selectionCallback: ((selection: TextSelection | null) => void) | null = null;
+	private highlightClickCallback: ((event: HighlightClickEvent | null) => void) | null = null;
+	private loadedAnnotations: Annotation[] = [];
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
 		const book = ePub(arrayBuffer);
@@ -162,6 +176,51 @@ class EpubService {
 			} else if (event.key === 'ArrowRight') {
 				this.nextPage();
 			}
+		});
+
+		// Handle text selection events
+		this.rendition.on('selected', (cfiRange: string, contents: any) => {
+			if (!this.selectionCallback) return;
+
+			const selection = contents.window.getSelection();
+			if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+				this.selectionCallback(null);
+				return;
+			}
+
+			const text = selection.toString().trim();
+			const range = selection.getRangeAt(0);
+			const rect = range.getBoundingClientRect();
+
+			// Get iframe position to calculate absolute position
+			const iframe = contents.document.defaultView.frameElement;
+			const iframeRect = iframe?.getBoundingClientRect() || { left: 0, top: 0 };
+
+			// Position popup above the selection
+			const position = {
+				x: iframeRect.left + rect.left + rect.width / 2,
+				y: iframeRect.top + rect.top - 10
+			};
+
+			this.selectionCallback({
+				text,
+				cfiRange,
+				position
+			});
+		});
+
+		// Clear selection when clicking elsewhere
+		this.rendition.on('click', () => {
+			// Small delay to allow selection event to fire first
+			setTimeout(() => {
+				const contents = this.rendition?.getContents() as any;
+				if (contents && contents[0]) {
+					const selection = contents[0].window?.getSelection();
+					if (!selection || selection.isCollapsed) {
+						this.selectionCallback?.(null);
+					}
+				}
+			}, 50);
 		});
 	}
 
@@ -454,6 +513,233 @@ class EpubService {
 		}
 	}
 
+	onTextSelected(callback: (selection: TextSelection | null) => void): void {
+		this.selectionCallback = callback;
+	}
+
+	onHighlightClicked(callback: (event: HighlightClickEvent | null) => void): void {
+		this.highlightClickCallback = callback;
+	}
+
+	clearSelection(): void {
+		const contents = this.rendition?.getContents() as any;
+		if (contents && contents[0]) {
+			contents[0].window?.getSelection()?.removeAllRanges();
+		}
+		this.selectionCallback?.(null);
+	}
+
+	addHighlight(annotation: Annotation): void {
+		if (!this.rendition) return;
+
+		const className = this.getHighlightClassName(annotation.type, annotation.color);
+		
+		// Track this annotation for style re-injection on page changes
+		if (!this.loadedAnnotations.find(a => a.cfiRange === annotation.cfiRange)) {
+			this.loadedAnnotations.push(annotation);
+		}
+		
+		// Get SVG styles for epub.js highlight (it uses SVG rect elements)
+		const svgStyles = this.getHighlightSvgStyle(annotation.type, annotation.color);
+		
+		// Add click handler for this highlight
+		// epub.js passes the DOM event directly to the callback
+		const clickHandler = (e: MouseEvent) => {
+			if (!this.highlightClickCallback) return;
+			
+			
+			// Get the clicked SVG element's position in the main viewport
+			const target = e.target as SVGElement;
+			const svgRect = target.getBoundingClientRect();
+			
+			// The SVG rect is relative to the iframe, we need to add the iframe's position
+			const iframeDoc = target.ownerDocument;
+			const iframeWin = iframeDoc?.defaultView;
+			const iframe = iframeWin?.frameElement as HTMLIFrameElement | null;
+			
+			let x = svgRect.left + svgRect.width / 2;
+			let y = svgRect.top;
+			
+			// If we found the iframe, add its offset
+			if (iframe) {
+				const iframeRect = iframe.getBoundingClientRect();
+				x += iframeRect.left;
+				y += iframeRect.top;
+			}
+			
+			this.highlightClickCallback({
+				annotation,
+				position: { x, y }
+			});
+		};
+		
+		this.rendition.annotations.add(
+			'highlight',
+			annotation.cfiRange,
+			{ id: annotation.id },
+			clickHandler,
+			className,
+			svgStyles
+		);
+	}
+
+	removeHighlight(cfiRange: string): void {
+		if (!this.rendition) return;
+		this.rendition.annotations.remove(cfiRange, 'highlight');
+		// Also remove from loaded annotations
+		this.loadedAnnotations = this.loadedAnnotations.filter(a => a.cfiRange !== cfiRange);
+	}
+
+	updateHighlight(annotation: Annotation): void {
+		if (!this.rendition) return;
+		// Remove old highlight and add new one with updated styles
+		this.rendition.annotations.remove(annotation.cfiRange, 'highlight');
+		// Update in loaded annotations
+		const index = this.loadedAnnotations.findIndex(a => a.cfiRange === annotation.cfiRange);
+		if (index >= 0) {
+			this.loadedAnnotations[index] = annotation;
+		}
+		// Re-add with new styles
+		this.addHighlight(annotation);
+	}
+
+	loadAnnotations(annotations: Annotation[]): void {
+		if (!this.rendition) return;
+		
+		// Store annotations for re-injection on page changes
+		this.loadedAnnotations = annotations;
+		
+		// Re-inject styles when content changes (new chapter/page loaded)
+		this.rendition.on('rendered', () => {
+			this.reinjectAllHighlightStyles();
+		});
+		
+		annotations.forEach((annotation) => {
+			this.addHighlight(annotation);
+		});
+	}
+
+	private reinjectAllHighlightStyles(): void {
+		// Re-inject all highlight styles for the current annotations
+		this.loadedAnnotations.forEach((annotation) => {
+			this.injectHighlightStyle(annotation.type, annotation.color);
+		});
+	}
+
+	private getHighlightClassName(type: AnnotationType, color: AnnotationColor): string {
+		if (type === 'note') {
+			return 'hl-note';
+		} else if (type === 'ai-chat') {
+			return 'hl-ai-chat';
+		} else {
+			return `hl-${color}`;
+		}
+	}
+
+	private getHighlightSvgStyle(type: AnnotationType, color: AnnotationColor): object {
+		// epub.js uses SVG rect elements for highlights
+		// These are SVG fill properties, not CSS
+		const colorMap: Record<AnnotationColor, string> = {
+			yellow: 'rgba(255, 235, 59, 0.75)',
+			green: 'rgba(76, 175, 80, 0.75)',
+			blue: 'rgba(33, 150, 243, 0.75)',
+			pink: 'rgba(249, 60, 123, 0.75)'
+		};
+
+		if (type === 'note') {
+			// Note: green with dashed underline effect
+			return {
+				'fill': 'rgba(76, 175, 80, 0.2)',
+				'fill-opacity': '0.2',
+				'mix-blend-mode': 'multiply',
+				'stroke': 'rgb(76, 175, 80)',
+				'stroke-width': '2',
+				'stroke-dasharray': '4,2'
+			};
+		} else if (type === 'ai-chat') {
+			// AI chat: blue with dashed underline effect
+			return {
+				'fill': 'rgba(33, 150, 243, 0.2)',
+				'fill-opacity': '0.2',
+				'mix-blend-mode': 'multiply',
+				'stroke': 'rgb(33, 150, 243)',
+				'stroke-width': '2',
+				'stroke-dasharray': '4,2'
+			};
+		} else {
+			// Regular highlight: colored fill
+			return {
+				'fill': colorMap[color],
+				'fill-opacity': '0.4',
+				'mix-blend-mode': 'multiply'
+			};
+		}
+	}
+
+	private injectHighlightStyle(type: AnnotationType, color: AnnotationColor): void {
+		const contents = this.rendition?.getContents() as any;
+		if (!contents || !contents[0]) return;
+
+		const doc = contents[0].document;
+		if (!doc) return;
+
+		const className = this.getHighlightClassName(type, color);
+		const styleId = `highlight-style-${className}`;
+
+		// Don't inject if already exists
+		if (doc.getElementById(styleId)) return;
+
+		const colorMap: Record<AnnotationColor, string> = {
+			yellow: 'rgba(255, 235, 59, 0.5)',
+			green: 'rgba(76, 175, 80, 0.5)',
+			blue: 'rgba(33, 150, 243, 0.5)',
+			pink: 'rgba(233, 30, 99, 0.5)'
+		};
+
+		let css = '';
+		if (type === 'note') {
+			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(76, 175, 80) !important; border-radius: 0 !important; }`;
+		} else if (type === 'ai-chat') {
+			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(33, 150, 243) !important; border-radius: 0 !important; }`;
+		} else {
+			css = `.${className} { background-color: ${colorMap[color]} !important; border-radius: 2px !important; }`;
+		}
+
+		const style = doc.createElement('style');
+		style.id = styleId;
+		style.textContent = css;
+		doc.head.appendChild(style);
+	}
+
+	async goToCfiWithHighlight(cfi: string): Promise<void> {
+		if (!this.rendition) return;
+		
+		await this.rendition.display(cfi);
+		
+		// Add a brief visual pulse effect after navigation
+		setTimeout(() => {
+			const contents = this.rendition?.getContents() as any;
+			if (contents && contents[0]) {
+				const doc = contents[0].document;
+				if (doc) {
+					// Find the highlight element and add pulse animation
+					const highlights = doc.querySelectorAll('.hl');
+					highlights.forEach((el: HTMLElement) => {
+						// Check if this highlight contains the target CFI
+						el.style.transition = 'all 0.3s ease';
+						el.style.transform = 'scale(1.05)';
+						el.style.boxShadow = '0 0 8px rgba(59, 130, 246, 0.8)';
+						
+						setTimeout(() => {
+							el.style.transform = 'scale(1)';
+							el.style.boxShadow = 'none';
+						}, 600);
+					});
+				}
+			}
+		}, 300);
+	}
+
 	destroy(): void {
 		if (this.resizeTimeout) {
 			clearTimeout(this.resizeTimeout);
@@ -475,6 +761,7 @@ class EpubService {
 		this.totalLocations = 0;
 		this.locationsReady = false;
 		this.onLocationsReady = null;
+		this.loadedAnnotations = [];
 	}
 }
 

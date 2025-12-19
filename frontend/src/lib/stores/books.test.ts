@@ -104,15 +104,19 @@ describe('books store', () => {
 			});
 
 			books.addAnnotation(bookId, {
+				cfiRange: 'epubcfi(/test/range)',
 				text: 'Highlighted text',
 				page: 10,
-				color: 'yellow'
+				color: 'yellow',
+				type: 'highlight'
 			});
 
 			const allBooks = get(books);
 			expect(allBooks[0].annotations).toHaveLength(1);
 			expect(allBooks[0].annotations[0].text).toBe('Highlighted text');
 			expect(allBooks[0].annotations[0].color).toBe('yellow');
+			expect(allBooks[0].annotations[0].type).toBe('highlight');
+			expect(allBooks[0].annotations[0].cfiRange).toBe('epubcfi(/test/range)');
 			expect(allBooks[0].annotations[0].createdAt).toBeInstanceOf(Date);
 		});
 	});
@@ -128,9 +132,11 @@ describe('books store', () => {
 			});
 
 			books.addAnnotation(bookId, {
+				cfiRange: 'epubcfi(/test/range)',
 				text: 'Highlighted text',
 				page: 10,
-				color: 'yellow'
+				color: 'yellow',
+				type: 'highlight'
 			});
 
 			const annotationId = get(books)[0].annotations[0].id;

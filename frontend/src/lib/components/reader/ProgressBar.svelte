@@ -51,7 +51,7 @@
 	}
 </script>
 
-<div class="border-t border-border px-4 py-2">
+<div class="progress-bar border-t border-border px-4 py-2">
 	<div class="flex items-center justify-between text-xs text-muted-foreground">
 		<div class="flex items-center gap-2">
 			<span>{percentage}%</span>

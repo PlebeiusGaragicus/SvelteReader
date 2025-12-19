@@ -11,7 +11,7 @@
 	let { toc, onClose, onItemClick }: Props = $props();
 </script>
 
-<div class="absolute inset-y-0 left-0 top-[53px] z-10 w-72 border-r border-border bg-card shadow-lg">
+<div class="toc-panel absolute inset-y-0 left-0 top-[53px] z-10 w-72 border-r border-border bg-card shadow-lg">
 	<div class="flex items-center justify-between border-b border-border p-4">
 		<h2 class="font-semibold">Contents</h2>
 		<button

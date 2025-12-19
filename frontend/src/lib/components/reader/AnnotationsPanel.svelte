@@ -1,16 +1,23 @@
 <script lang="ts">
 	import { X, Highlighter, MessageSquare, Trash2 } from '@lucide/svelte';
-	import type { Annotation, AnnotationColor } from '$lib/types';
+	import type { Annotation, AnnotationColor, AnnotationType } from '$lib/types';
 
 	interface Props {
 		annotations: Annotation[];
 		onClose: () => void;
 		onDelete: (annotationId: string) => void;
+		onNavigate: (annotation: Annotation) => void;
 	}
 
-	let { annotations, onClose, onDelete }: Props = $props();
+	let { annotations, onClose, onDelete, onNavigate }: Props = $props();
 
-	function getColorClass(color: AnnotationColor): string {
+	function getColorClass(color: AnnotationColor, type: AnnotationType): string {
+		if (type === 'note') {
+			return 'bg-transparent border-green-500 border-2';
+		} else if (type === 'ai-chat') {
+			return 'bg-transparent border-blue-500 border-2';
+		}
+		
 		const colors: Record<AnnotationColor, string> = {
 			yellow: 'bg-yellow-200/50 border-yellow-400',
 			green: 'bg-green-200/50 border-green-400',
@@ -21,7 +28,7 @@
 	}
 </script>
 
-<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card shadow-lg">
+<div class="annotations-panel absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card shadow-lg">
 	<div class="flex items-center justify-between border-b border-border p-4">
 		<div>
 			<h2 class="font-semibold">Annotations</h2>
@@ -49,7 +56,13 @@
 		{:else}
 			<div class="space-y-3">
 				{#each annotations as annotation (annotation.id)}
-					<div class="rounded-lg border {getColorClass(annotation.color)} p-3">
+					<div
+						class="rounded-lg border {getColorClass(annotation.color, annotation.type)} p-3 transition-all hover:shadow-md cursor-pointer"
+						onclick={() => onNavigate(annotation)}
+						onkeydown={(e) => e.key === 'Enter' && onNavigate(annotation)}
+						role="button"
+						tabindex="0"
+					>
 						<p class="text-sm italic">"{annotation.text}"</p>
 						{#if annotation.note}
 							<div class="mt-2 flex items-start gap-2 border-t border-border/50 pt-2">
@@ -60,7 +73,7 @@
 						<div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">
 							<span>Page {annotation.page}</span>
 							<button
-								onclick={() => onDelete(annotation.id)}
+								onclick={(e) => { e.stopPropagation(); onDelete(annotation.id); }}
 								class="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-destructive/10 hover:text-destructive"
 								aria-label="Delete annotation"
 							>
