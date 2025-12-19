@@ -19,17 +19,24 @@ from cashu.core.helpers import sum_proofs
 class WalletService:
     """Service for managing the Cashu hot wallet."""
 
-    def __init__(self, db_path: str = "wallet_db", mint_url: Optional[str] = None):
+    def __init__(
+        self, 
+        db_path: str = "wallet_db", 
+        mint_url: Optional[str] = None,
+        mnemonic: Optional[str] = None,
+    ):
         """Initialize the wallet service.
 
         Args:
             db_path: Path to the SQLite database directory
             mint_url: Default mint URL (can be overridden by token's mint)
+            mnemonic: BIP39 mnemonic seed phrase for deterministic wallet recovery
         """
         self.db_path = Path(db_path)
         self.mint_url = mint_url or os.getenv(
             "MINT_URL", "https://mint.minibits.cash/Bitcoin"
         )
+        self.mnemonic = mnemonic
         self._wallet: Optional[Wallet] = None
         self._initialized = False
 
@@ -48,12 +55,18 @@ class WalletService:
         # Ensure db directory exists
         self.db_path.mkdir(parents=True, exist_ok=True)
         
-        # Create wallet with the mint URL
-        wallet = await Wallet.with_db(
+        # Create wallet - use skip_db_read=True so we can init with custom mnemonic
+        wallet = Wallet(
             url=url,
             db=str(self.db_path),
             name="sveltereader",
         )
+        
+        # Run migrations
+        await wallet._migrate_database()
+        
+        # Initialize private key with mnemonic if provided
+        await wallet._init_private_key(from_mnemonic=self.mnemonic)
         
         # Load the mint's keys
         await wallet.load_mint()
@@ -159,9 +172,10 @@ class WalletService:
             
         try:
             await self._wallet.load_proofs(reload=True)
-            # available_balance excludes reserved proofs
+            # available_balance returns Amount object, get the int value
             balance = self._wallet.available_balance
-            return balance
+            # Handle both Amount object and int
+            return int(balance.amount) if hasattr(balance, 'amount') else int(balance)
         except Exception as e:
             print(f"[Wallet] Failed to get balance: {e}")
             return 0
@@ -180,7 +194,10 @@ class WalletService:
             
         try:
             await self._wallet.load_proofs(reload=True)
-            balance = self._wallet.available_balance
+            balance_obj = self._wallet.available_balance
+            # Handle both Amount object and int
+            balance = int(balance_obj.amount) if hasattr(balance_obj, 'amount') else int(balance_obj)
+            
             if amount > balance:
                 print(f"[Wallet] Insufficient balance: {balance} < {amount}")
                 return None
@@ -229,8 +246,23 @@ def get_wallet_service() -> WalletService:
     if _wallet_service is None:
         db_path = os.getenv("WALLET_DB_PATH", "wallet_db")
         mint_url = os.getenv("MINT_URL", "https://mint.minibits.cash/Bitcoin")
-        _wallet_service = WalletService(db_path=db_path, mint_url=mint_url)
-    # TODO - we should probably gracefully fail and warn the admin
+        mnemonic = os.getenv("WALLET_MNEMONIC")
+        
+        if not mnemonic:
+            raise RuntimeError(
+                "\n" + "=" * 60 + "\n"
+                "FATAL: WALLET_MNEMONIC environment variable is not set!\n"
+                "=" * 60 + "\n"
+                "A BIP39 12-word mnemonic is REQUIRED to run the wallet.\n"
+                "Without it, funds cannot be recovered if the database is lost.\n\n"
+                "To fix this:\n"
+                "1. Generate a mnemonic at: https://iancoleman.io/bip39/\n"
+                "2. Add to backend/.env: WALLET_MNEMONIC=word1 word2 word3 ...\n"
+                "3. BACK UP YOUR MNEMONIC SECURELY!\n"
+                "=" * 60
+            )
+        
+        _wallet_service = WalletService(db_path=db_path, mint_url=mint_url, mnemonic=mnemonic)
     return _wallet_service
 
 

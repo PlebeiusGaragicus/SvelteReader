@@ -1,4 +1,4 @@
-wallet_db/*
+wallet_db
 
 node_modules/
 dist/
