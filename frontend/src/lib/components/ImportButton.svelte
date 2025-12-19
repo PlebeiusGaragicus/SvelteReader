@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { Upload, Loader2 } from '@lucide/svelte';
-	import { books, storeEpubData } from '$lib/stores/books';
+	import { books } from '$lib/stores/books';
+	import { storeEpubData } from '$lib/services/storageService';
 	import { epubService } from '$lib/services/epubService';
+	import { AppError } from '$lib/types';
 	import { toast } from 'svelte-sonner';
 
 	let fileInput: HTMLInputElement;
@@ -46,7 +48,11 @@
 			toast.success(`Imported "${parsed.metadata.title}"`);
 		} catch (error) {
 			console.error('Failed to import EPUB:', error);
-			toast.error('Failed to import EPUB. Please try again.');
+			if (error instanceof AppError) {
+				toast.error(error.message);
+			} else {
+				toast.error('Failed to import EPUB. Please try again.');
+			}
 		} finally {
 			isImporting = false;
 			// Reset input so same file can be selected again

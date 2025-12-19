@@ -1,13 +1,11 @@
 import ePub, { Book, Rendition } from 'epubjs';
 import type { NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
+import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationType, AnnotationColor } from '$lib/types';
+import { AppError } from '$lib/types';
 
-export interface BookMetadata {
-	title: string;
-	author: string;
-	coverUrl?: string;
-	totalPages: number;
-}
+// Re-export types for backward compatibility
+export type { BookMetadata, TocItem, LocationInfo } from '$lib/types';
 
 export interface ParsedBook {
 	metadata: BookMetadata;
@@ -15,18 +13,27 @@ export interface ParsedBook {
 	arrayBuffer: ArrayBuffer;
 }
 
-export interface TocItem {
-	id: string;
+export interface ChapterPosition {
 	href: string;
 	label: string;
-	subitems?: TocItem[];
+	startPercent: number;
+	endPercent: number;
 }
 
-export interface LocationInfo {
-	cfi: string;
-	percentage: number;
-	page: number;
-	totalPages: number;
+// Constants for page estimation
+const ESTIMATED_PAGES_PER_CHAPTER = 20;
+const MIN_ESTIMATED_PAGES = 100;
+const LOCATIONS_CHARS_PER_PAGE = 1024;
+
+export interface TextSelection {
+	text: string;
+	cfiRange: string;
+	position: { x: number; y: number };
+}
+
+export interface HighlightClickEvent {
+	annotation: Annotation;
+	position: { x: number; y: number };
 }
 
 class EpubService {
@@ -38,6 +45,10 @@ class EpubService {
 	private container: HTMLElement | null = null;
 	private resizeObserver: ResizeObserver | null = null;
 	private resizeTimeout: ReturnType<typeof setTimeout> | null = null;
+	private selectionCallback: ((selection: TextSelection | null) => void) | null = null;
+	private highlightClickCallback: ((event: HighlightClickEvent | null) => void) | null = null;
+	private contentClickCallback: (() => void) | null = null;
+	private loadedAnnotations: Annotation[] = [];
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
 		const book = ePub(arrayBuffer);
@@ -60,7 +71,10 @@ class EpubService {
 		// Estimate total pages based on spine items (chapters)
 		// This is a rough estimate - actual page count depends on rendering
 		const spineItems = (spine as any).items || [];
-		const totalPages = Math.max(spineItems.length * 20, 100); // Rough estimate
+		const totalPages = Math.max(
+			spineItems.length * ESTIMATED_PAGES_PER_CHAPTER,
+			MIN_ESTIMATED_PAGES
+		);
 
 		return {
 			metadata: {
@@ -96,9 +110,18 @@ class EpubService {
 
 	async loadBook(arrayBuffer: ArrayBuffer): Promise<Book> {
 		this.destroy();
-		this.book = ePub(arrayBuffer);
-		await this.book.ready;
-		return this.book;
+		try {
+			this.book = ePub(arrayBuffer);
+			await this.book.ready;
+			return this.book;
+		} catch (e) {
+			console.error('Failed to load EPUB:', e);
+			throw new AppError(
+				'Failed to load the book. The file may be corrupted.',
+				'EPUB_PARSE_FAILED',
+				true
+			);
+		}
 	}
 
 	async renderBook(
@@ -155,6 +178,54 @@ class EpubService {
 				this.nextPage();
 			}
 		});
+
+		// Handle text selection events
+		this.rendition.on('selected', (cfiRange: string, contents: any) => {
+			if (!this.selectionCallback) return;
+
+			const selection = contents.window.getSelection();
+			if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+				this.selectionCallback(null);
+				return;
+			}
+
+			const text = selection.toString().trim();
+			const range = selection.getRangeAt(0);
+			const rect = range.getBoundingClientRect();
+
+			// Get iframe position to calculate absolute position
+			const iframe = contents.document.defaultView.frameElement;
+			const iframeRect = iframe?.getBoundingClientRect() || { left: 0, top: 0 };
+
+			// Position popup above the selection
+			const position = {
+				x: iframeRect.left + rect.left + rect.width / 2,
+				y: iframeRect.top + rect.top - 10
+			};
+
+			this.selectionCallback({
+				text,
+				cfiRange,
+				position
+			});
+		});
+
+		// Clear selection when clicking elsewhere and notify content click listeners
+		this.rendition.on('click', () => {
+			// Notify content click listeners (for closing panels/popups)
+			this.contentClickCallback?.();
+			
+			// Small delay to allow selection event to fire first
+			setTimeout(() => {
+				const contents = this.rendition?.getContents() as any;
+				if (contents && contents[0]) {
+					const selection = contents[0].window?.getSelection();
+					if (!selection || selection.isCollapsed) {
+						this.selectionCallback?.(null);
+					}
+				}
+			}, 50);
+		});
 	}
 
 	private setupResizeObserver(container: HTMLElement): void {
@@ -203,7 +274,7 @@ class EpubService {
 
 			// Generate locations in background
 			console.log('Generating locations...');
-			const locations = await this.book.locations.generate(1024);
+			const locations = await this.book.locations.generate(LOCATIONS_CHARS_PER_PAGE);
 			this.totalLocations = this.book.locations.length();
 			this.locationsReady = true;
 			this.onLocationsReady?.();
@@ -235,6 +306,106 @@ class EpubService {
 
 		const navigation = await this.book.loaded.navigation;
 		return this.convertNavItems(navigation.toc);
+	}
+
+	/**
+	 * Calculate chapter positions as percentages for the progress bar.
+	 * Uses epub.js locations for accurate positioning that matches progress calculation.
+	 * Falls back to equal spine-based segments if locations unavailable or parsing fails.
+	 * Some ebooks have malformed TOCs or CFIs - graceful degradation is intentional.
+	 */
+	async getChapterPositions(): Promise<ChapterPosition[]> {
+		if (!this.book) return [];
+
+		const navigation = await this.book.loaded.navigation;
+		const spine = this.book.spine as any;
+		const spineItems = spine?.items || [];
+		const spineLength = spineItems.length || 1;
+
+		// Map href -> spine index for fallback calculation
+		const hrefToIndex = new Map<string, number>();
+		spineItems.forEach((item: any, index: number) => {
+			const baseHref = item.href?.split('#')[0];
+			if (baseHref && !hrefToIndex.has(baseHref)) {
+				hrefToIndex.set(baseHref, index);
+			}
+		});
+
+		// Build spine index -> percentage map by scanning _locations array directly.
+		// This matches how getCurrentLocation calculates progress: locationIndex / totalLocations.
+		// CFI format: "epubcfi(/6/X!/4/...)" where X = spineIndex * 2 + 2
+		const spineToPercent = new Map<number, number>();
+		if (this.locationsReady && this.book && this.totalLocations > 0) {
+			const locations = (this.book.locations as any)._locations as string[];
+			if (locations && locations.length > 0) {
+				let lastSpineIndex = -1;
+				for (let i = 0; i < locations.length; i++) {
+					const cfi = locations[i];
+					const match = cfi.match(/epubcfi\(\/6\/(\d+)/);
+					if (match) {
+						const cfiSpineNum = parseInt(match[1], 10);
+						const spineIndex = (cfiSpineNum - 2) / 2;
+						if (spineIndex !== lastSpineIndex && spineIndex >= 0) {
+							const percent = (i / this.totalLocations) * 100;
+							spineToPercent.set(spineIndex, percent);
+							lastSpineIndex = spineIndex;
+						}
+					}
+				}
+			}
+		}
+
+		// Flatten TOC and collect start positions
+		const rawPositions: { href: string; label: string; startPercent: number }[] = [];
+		
+		const flattenToc = (items: TocItem[]): void => {
+			for (const item of items) {
+				let startPercent: number | undefined;
+				const baseHref = item.href?.split('#')[0];
+				const spineIndex = hrefToIndex.get(baseHref);
+				
+				// Use location-based percentage if available (accurate)
+				if (spineIndex !== undefined && spineToPercent.has(spineIndex)) {
+					startPercent = spineToPercent.get(spineIndex);
+				}
+
+				// Fallback: equal segments based on spine index (less accurate)
+				if (startPercent === undefined && spineIndex !== undefined) {
+					startPercent = (spineIndex / spineLength) * 100;
+				}
+
+				if (startPercent !== undefined) {
+					rawPositions.push({
+						href: item.href,
+						label: item.label,
+						startPercent
+					});
+				}
+				
+				if (item.subitems) {
+					flattenToc(item.subitems);
+				}
+			}
+		};
+
+		flattenToc(this.convertNavItems(navigation.toc));
+
+		rawPositions.sort((a, b) => a.startPercent - b.startPercent);
+
+		// Calculate end positions: each chapter ends where the next begins
+		const positions: ChapterPosition[] = rawPositions.map((pos, index) => {
+			const nextStart = index < rawPositions.length - 1 
+				? rawPositions[index + 1].startPercent 
+				: 100;
+			return {
+				href: pos.href,
+				label: pos.label,
+				startPercent: pos.startPercent,
+				endPercent: nextStart
+			};
+		});
+
+		return positions;
 	}
 
 	private convertNavItems(items: NavItem[]): TocItem[] {
@@ -346,6 +517,237 @@ class EpubService {
 		}
 	}
 
+	onTextSelected(callback: (selection: TextSelection | null) => void): void {
+		this.selectionCallback = callback;
+	}
+
+	onHighlightClicked(callback: (event: HighlightClickEvent | null) => void): void {
+		this.highlightClickCallback = callback;
+	}
+
+	onContentClicked(callback: () => void): void {
+		this.contentClickCallback = callback;
+	}
+
+	clearSelection(): void {
+		const contents = this.rendition?.getContents() as any;
+		if (contents && contents[0]) {
+			contents[0].window?.getSelection()?.removeAllRanges();
+		}
+		this.selectionCallback?.(null);
+	}
+
+	addHighlight(annotation: Annotation): void {
+		if (!this.rendition) return;
+
+		const className = this.getHighlightClassName(annotation.type, annotation.color);
+		
+		// Track this annotation for style re-injection on page changes
+		if (!this.loadedAnnotations.find(a => a.cfiRange === annotation.cfiRange)) {
+			this.loadedAnnotations.push(annotation);
+		}
+		
+		// Get SVG styles for epub.js highlight (it uses SVG rect elements)
+		const svgStyles = this.getHighlightSvgStyle(annotation.type, annotation.color);
+		
+		// Add click handler for this highlight
+		// epub.js passes the DOM event directly to the callback
+		const clickHandler = (e: MouseEvent) => {
+			if (!this.highlightClickCallback) return;
+			
+			
+			// Get the clicked SVG element's position in the main viewport
+			const target = e.target as SVGElement;
+			const svgRect = target.getBoundingClientRect();
+			
+			// The SVG rect is relative to the iframe, we need to add the iframe's position
+			const iframeDoc = target.ownerDocument;
+			const iframeWin = iframeDoc?.defaultView;
+			const iframe = iframeWin?.frameElement as HTMLIFrameElement | null;
+			
+			let x = svgRect.left + svgRect.width / 2;
+			let y = svgRect.top - 40; // Offset upward so popup appears above the highlight
+			
+			// If we found the iframe, add its offset
+			if (iframe) {
+				const iframeRect = iframe.getBoundingClientRect();
+				x += iframeRect.left;
+				y += iframeRect.top;
+			}
+			
+			this.highlightClickCallback({
+				annotation,
+				position: { x, y }
+			});
+		};
+		
+		this.rendition.annotations.add(
+			'highlight',
+			annotation.cfiRange,
+			{ id: annotation.id },
+			clickHandler,
+			className,
+			svgStyles
+		);
+	}
+
+	removeHighlight(cfiRange: string): void {
+		if (!this.rendition) return;
+		this.rendition.annotations.remove(cfiRange, 'highlight');
+		// Also remove from loaded annotations
+		this.loadedAnnotations = this.loadedAnnotations.filter(a => a.cfiRange !== cfiRange);
+	}
+
+	updateHighlight(annotation: Annotation): void {
+		if (!this.rendition) return;
+		// Remove old highlight and add new one with updated styles
+		this.rendition.annotations.remove(annotation.cfiRange, 'highlight');
+		// Update in loaded annotations
+		const index = this.loadedAnnotations.findIndex(a => a.cfiRange === annotation.cfiRange);
+		if (index >= 0) {
+			this.loadedAnnotations[index] = annotation;
+		}
+		// Re-add with new styles
+		this.addHighlight(annotation);
+	}
+
+	loadAnnotations(annotations: Annotation[]): void {
+		if (!this.rendition) return;
+		
+		// Store annotations for re-injection on page changes
+		this.loadedAnnotations = annotations;
+		
+		// Re-inject styles when content changes (new chapter/page loaded)
+		this.rendition.on('rendered', () => {
+			this.reinjectAllHighlightStyles();
+		});
+		
+		annotations.forEach((annotation) => {
+			this.addHighlight(annotation);
+		});
+	}
+
+	private reinjectAllHighlightStyles(): void {
+		// Re-inject all highlight styles for the current annotations
+		this.loadedAnnotations.forEach((annotation) => {
+			this.injectHighlightStyle(annotation.type, annotation.color);
+		});
+	}
+
+	private getHighlightClassName(type: AnnotationType, color: AnnotationColor): string {
+		if (type === 'note') {
+			return 'hl-note';
+		} else if (type === 'ai-chat') {
+			return 'hl-ai-chat';
+		} else {
+			return `hl-${color}`;
+		}
+	}
+
+	private getHighlightSvgStyle(type: AnnotationType, color: AnnotationColor): object {
+		// epub.js uses SVG rect elements for highlights
+		// These are SVG fill properties, not CSS
+		const colorMap: Record<AnnotationColor, string> = {
+			yellow: 'rgba(255, 235, 59, 0.75)',
+			green: 'rgba(76, 175, 80, 0.75)',
+			blue: 'rgba(33, 150, 243, 0.75)',
+			pink: 'rgba(249, 60, 123, 0.75)'
+		};
+
+		if (type === 'note') {
+			// Note: green with dashed underline effect
+			return {
+				'fill': 'rgba(76, 175, 80, 0.2)',
+				'fill-opacity': '0.2',
+				'mix-blend-mode': 'multiply',
+				'stroke': 'rgb(76, 175, 80)',
+				'stroke-width': '2',
+				'stroke-dasharray': '4,2'
+			};
+		} else if (type === 'ai-chat') {
+			// AI chat: blue with dashed underline effect
+			return {
+				'fill': 'rgba(33, 150, 243, 0.2)',
+				'fill-opacity': '0.2',
+				'mix-blend-mode': 'multiply',
+				'stroke': 'rgb(33, 150, 243)',
+				'stroke-width': '2',
+				'stroke-dasharray': '4,2'
+			};
+		} else {
+			// Regular highlight: colored fill
+			return {
+				'fill': colorMap[color],
+				'fill-opacity': '0.4',
+				'mix-blend-mode': 'multiply'
+			};
+		}
+	}
+
+	private injectHighlightStyle(type: AnnotationType, color: AnnotationColor): void {
+		const contents = this.rendition?.getContents() as any;
+		if (!contents || !contents[0]) return;
+
+		const doc = contents[0].document;
+		if (!doc) return;
+
+		const className = this.getHighlightClassName(type, color);
+		const styleId = `highlight-style-${className}`;
+
+		// Don't inject if already exists
+		if (doc.getElementById(styleId)) return;
+
+		const colorMap: Record<AnnotationColor, string> = {
+			yellow: 'rgba(255, 235, 59, 0.5)',
+			green: 'rgba(76, 175, 80, 0.5)',
+			blue: 'rgba(33, 150, 243, 0.5)',
+			pink: 'rgba(233, 30, 99, 0.5)'
+		};
+
+		let css = '';
+		if (type === 'note') {
+			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(76, 175, 80) !important; border-radius: 0 !important; }`;
+		} else if (type === 'ai-chat') {
+			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(33, 150, 243) !important; border-radius: 0 !important; }`;
+		} else {
+			css = `.${className} { background-color: ${colorMap[color]} !important; border-radius: 2px !important; }`;
+		}
+
+		const style = doc.createElement('style');
+		style.id = styleId;
+		style.textContent = css;
+		doc.head.appendChild(style);
+	}
+
+	async goToCfiWithHighlight(cfi: string): Promise<void> {
+		if (!this.rendition) return;
+		
+		await this.rendition.display(cfi);
+		
+		// Add a brief visual pulse effect after navigation
+		setTimeout(() => {
+			const contents = this.rendition?.getContents() as any;
+			if (contents && contents[0]) {
+				const doc = contents[0].document;
+				if (doc) {
+					// Find the highlight element and add pulse animation
+					const highlights = doc.querySelectorAll('.hl');
+					highlights.forEach((el: HTMLElement) => {
+						// Check if this highlight contains the target CFI
+						el.style.transition = 'all 0.3s ease';
+						el.style.transform = 'scale(1.05)';
+						el.style.boxShadow = '0 0 8px rgba(59, 130, 246, 0.8)';
+						
+						setTimeout(() => {
+							el.style.transform = 'scale(1)';
+							el.style.boxShadow = 'none';
+						}, 600);
+					});
+				}
+			}
+		}, 300);
+	}
+
 	destroy(): void {
 		if (this.resizeTimeout) {
 			clearTimeout(this.resizeTimeout);
@@ -367,6 +769,7 @@ class EpubService {
 		this.totalLocations = 0;
 		this.locationsReady = false;
 		this.onLocationsReady = null;
+		this.loadedAnnotations = [];
 	}
 }
 

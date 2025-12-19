@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { browser } from '$app/environment';
+import { AppError } from '$lib/types';
 
 interface SvelteReaderDB extends DBSchema {
 	epubs: {
@@ -46,7 +47,11 @@ export async function storeEpubData(bookId: string, arrayBuffer: ArrayBuffer): P
 		await db.put('epubs', arrayBuffer, bookId);
 	} catch (e) {
 		console.error('Failed to store EPUB data:', e);
-		throw e;
+		throw new AppError(
+			'Failed to store EPUB data. Your browser storage may be full.',
+			'STORAGE_WRITE_FAILED',
+			true
+		);
 	}
 }
 
@@ -59,7 +64,11 @@ export async function getEpubData(bookId: string): Promise<ArrayBuffer | null> {
 		return data ?? null;
 	} catch (e) {
 		console.error('Failed to get EPUB data:', e);
-		return null;
+		throw new AppError(
+			'Failed to retrieve book data from storage.',
+			'STORAGE_READ_FAILED',
+			true
+		);
 	}
 }
 
@@ -72,6 +81,7 @@ export async function removeEpubData(bookId: string): Promise<void> {
 		await db.delete('locations', bookId);
 	} catch (e) {
 		console.error('Failed to remove EPUB data:', e);
+		// Non-critical: log but don't throw - book metadata will still be removed
 	}
 }
 
@@ -83,6 +93,7 @@ export async function storeLocations(bookId: string, locationsJson: string): Pro
 		await db.put('locations', locationsJson, bookId);
 	} catch (e) {
 		console.error('Failed to store locations:', e);
+		// Non-critical: locations can be regenerated, don't throw
 	}
 }
 
@@ -95,6 +106,7 @@ export async function getLocations(bookId: string): Promise<string | null> {
 		return data ?? null;
 	} catch (e) {
 		console.error('Failed to get locations:', e);
+		// Non-critical: return null and locations will be regenerated
 		return null;
 	}
 }
@@ -108,5 +120,10 @@ export async function clearAllData(): Promise<void> {
 		await db.clear('locations');
 	} catch (e) {
 		console.error('Failed to clear data:', e);
+		throw new AppError(
+			'Failed to clear storage data.',
+			'STORAGE_WRITE_FAILED',
+			true
+		);
 	}
 }

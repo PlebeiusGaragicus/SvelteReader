@@ -15,10 +15,10 @@
 		</div>
 	{:else}
 		<div class="mb-6 flex items-center justify-between">
-			<h1 class="text-2xl font-bold">Library</h1>
+			<h1 class="library-header text-2xl font-bold">Library</h1>
 			<ImportButton />
 		</div>
-		<div class="grid grid-cols-2 gap-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+		<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
 			{#each $books as book (book.id)}
 				<BookCard {book} />
 			{/each}
