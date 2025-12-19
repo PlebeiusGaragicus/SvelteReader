@@ -67,14 +67,17 @@ function createChatStore() {
 		let payment: PaymentInfo | undefined;
 		if (options?.generatePayment) {
 			try {
+				console.log('[Chat] Generating payment token...');
 				const paymentResult = await options.generatePayment();
 				if (!paymentResult) {
 					error = 'Payment generation failed or insufficient balance';
+					console.log('[Chat] Payment generation failed - no result');
 					isLoading = false;
 					isStreaming = false;
 					return false;
 				}
 				payment = paymentResult;
+				console.log(`[Chat] Payment token generated: ${paymentResult.amount_sats} sats`);
 				
 				// Store pending payment for potential refund recovery
 				if (paymentResult.ecash_token) {
@@ -83,10 +86,14 @@ function createChatStore() {
 						messageId,
 						timestamp: Date.now(),
 					};
-					console.log('[Chat] Stored pending payment for refund recovery');
+					// DEV: Log token for manual recovery
+					console.log('[Chat] ========== PENDING PAYMENT TOKEN ==========');
+					console.log(`[Chat] ${paymentResult.ecash_token}`);
+					console.log('[Chat] =============================================');
 				}
 			} catch (e) {
 				error = `Payment error: ${(e as Error).message}`;
+				console.error('[Chat] Payment generation error:', e);
 				isLoading = false;
 				isStreaming = false;
 				return false;
@@ -136,13 +143,20 @@ function createChatStore() {
 								: m
 						);
 					},
-					onComplete: (finalMessages) => {
+					onComplete: (finalMessages, refund) => {
 						// Replace with final state from server
 						messages = finalMessages;
 						isStreaming = false;
-						// Success - clear pending payment (it was redeemed by agent)
-						pendingPayment = null;
-						console.log('[Chat] Message successful, pending payment cleared');
+						
+						if (refund) {
+							// Agent signaled refund needed
+							console.log('[Chat] Agent signaled refund, attempting recovery');
+							attemptRefund('onComplete with refund flag');
+						} else {
+							// Success - clear pending payment (it was redeemed by agent)
+							pendingPayment = null;
+							console.log('[Chat] Message successful, pending payment cleared');
+						}
 					},
 					onError: (err) => {
 						error = err.message;
@@ -151,6 +165,11 @@ function createChatStore() {
 						isStreaming = false;
 						// Attempt refund on error
 						attemptRefund('onError callback');
+					},
+					onRefund: () => {
+						// Agent explicitly signaled refund
+						console.log('[Chat] Received onRefund callback from agent');
+						attemptRefund('onRefund callback');
 					},
 					onThreadId: (id) => {
 						threadId = id;
@@ -186,26 +205,34 @@ function createChatStore() {
 		}
 		
 		const token = pendingPayment.token;
-		console.log(`[Chat] Attempting refund (${reason}): token exists`);
+		console.log(`[Chat] Attempting refund (${reason})`);
+		
+		// DEV: Always log token for manual recovery in case auto-refund fails
+		console.log('[Chat] ========== REFUND TOKEN (for manual recovery) ==========');
+		console.log(`[Chat] ${token}`);
+		console.log('[Chat] =========================================================');
 		
 		if (refundCallback) {
 			try {
+				console.log('[Chat] Calling refund callback...');
 				const success = await refundCallback(token);
 				if (success) {
 					console.log('[Chat] Refund successful - funds returned to wallet');
 					pendingPayment = null;
 					return true;
 				} else {
-					console.warn('[Chat] Refund callback returned false');
+					console.warn('[Chat] Refund callback returned false - token may already be spent');
 				}
 			} catch (e) {
-				console.error('[Chat] Refund failed:', e);
+				console.error('[Chat] Refund callback threw error:', e);
 			}
 		} else {
 			console.warn('[Chat] No refund callback set - cannot auto-refund');
+			console.warn('[Chat] Copy the token above and manually redeem it in your wallet');
 		}
 		
 		// Keep pending payment for manual recovery
+		console.log('[Chat] Keeping pending payment for manual recovery');
 		return false;
 	}
 	

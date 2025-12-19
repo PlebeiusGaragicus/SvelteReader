@@ -24,9 +24,10 @@ export function getClient(apiUrl?: string): Client {
 export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
-	onComplete?: (messages: Message[]) => void;
+	onComplete?: (messages: Message[], refund?: boolean) => void;
 	onError?: (error: Error) => void;
 	onThreadId?: (threadId: string) => void;
+	onRefund?: () => void;  // Called when agent signals refund is needed
 }
 
 export interface SubmitOptions {
@@ -78,6 +79,7 @@ export async function submitMessage(
 	
 	const messages: Message[] = [];
 	let currentContent = '';
+	let shouldRefund = false;
 	
 	try {
 		// Stream the response
@@ -87,8 +89,20 @@ export async function submitMessage(
 		});
 		
 		for await (const event of stream) {
+			console.log('[LangGraph] Stream event:', event.event, 'data keys:', Object.keys(event.data || {}));
+			
 			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[] };
+				const data = event.data as { messages?: Message[]; refund?: boolean };
+				
+				// Debug: log the refund value
+				console.log('[LangGraph] Values event - refund:', data.refund, 'type:', typeof data.refund);
+				
+				// Check for refund flag from agent
+				if (data.refund === true) {
+					console.log('[LangGraph] Agent signaled refund needed');
+					shouldRefund = true;
+				}
+				
 				if (data.messages) {
 					messages.length = 0;
 					messages.push(...data.messages);
@@ -113,9 +127,15 @@ export async function submitMessage(
 			}
 		}
 		
-		callbacks.onComplete?.(messages);
+		// Signal refund if needed
+		console.log('[LangGraph] Stream complete - shouldRefund:', shouldRefund);
+		if (shouldRefund) {
+			callbacks.onRefund?.();
+		}
 		
-		return { threadId, messages };
+		callbacks.onComplete?.(messages, shouldRefund);
+		
+		return { threadId, messages, refund: shouldRefund };
 	} catch (error) {
 		callbacks.onError?.(error as Error);
 		throw error;

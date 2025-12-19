@@ -116,7 +116,7 @@
 <div
 	bind:this={popupElement}
 	class="annotation-edit-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover text-popover-foreground shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
-	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%); background-color: hsl(var(--popover)); color: hsl(var(--popover-foreground));"
+	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%); background-color: var(--popover); color: var(--popover-foreground);"
 	role="dialog"
 	aria-label="Edit annotation"
 >

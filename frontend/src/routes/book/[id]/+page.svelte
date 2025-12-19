@@ -438,7 +438,7 @@
 		{/if}
 
 		{#if showAIChat}
-			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: hsl(var(--card)); color: hsl(var(--card-foreground));">
+			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: var(--card); color: var(--card-foreground);">
 				<ChatThread
 					onClose={() => { showAIChat = false; chatPassageContext = null; }}
 					passageContext={chatPassageContext || undefined}

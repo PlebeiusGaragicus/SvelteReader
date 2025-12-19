@@ -118,71 +118,61 @@ def create_model():
     )
 
 
-def parse_cashu_token(token: str) -> dict | None:
-    """Parse a Cashu token to extract mint URL and proofs.
+def validate_token_format(token: str) -> bool:
+    """Validate that a string looks like a valid Cashu token.
     
-    Cashu tokens are base64url encoded JSON with a 'cashu' prefix.
-    Format: cashuA<base64url_json> or cashuB<base64url_json>
+    Cashu tokens have two formats:
+    - cashuA: base64url encoded JSON
+    - cashuB: base64url encoded CBOR (binary)
+    
+    We just check the prefix and that it's valid base64url.
+    Actual validation happens when nutstash tries to redeem it.
     """
     try:
-        # Remove cashu prefix (cashuA or cashuB)
-        if token.startswith("cashuA"):
-            token_data = token[6:]
-        elif token.startswith("cashuB"):
-            token_data = token[6:]
-        else:
+        # Check prefix
+        if not (token.startswith("cashuA") or token.startswith("cashuB")):
             print(f"[Payment] Unknown token format: {token[:10]}...")
-            return None
+            return False
         
-        # Decode base64url
+        token_data = token[6:]
+        
+        # Check it's valid base64url by trying to decode
         # Add padding if needed
         padding = 4 - len(token_data) % 4
         if padding != 4:
             token_data += "=" * padding
         
         decoded = base64.urlsafe_b64decode(token_data)
-        return json.loads(decoded)
+        
+        # Just check we got some data
+        if len(decoded) < 10:
+            print("[Payment] Token data too short")
+            return False
+        
+        token_type = "CBOR" if token.startswith("cashuB") else "JSON"
+        print(f"[Payment] Token format valid: {token_type}, {len(decoded)} bytes")
+        return True
+        
     except Exception as e:
-        print(f"[Payment] Failed to parse token: {e}")
-        return None
+        print(f"[Payment] Token format validation failed: {e}")
+        return False
 
 
 async def validate_token_state(token: str) -> tuple[bool, str | None]:
-    """Validate that a Cashu token is UNSPENT without redeeming it.
+    """Validate that a Cashu token has valid format.
     
-    Uses NUT-07 checkstate endpoint to verify token validity.
-    Returns (is_valid, mint_url).
+    We do basic format validation here. The actual spend check
+    happens when nutstash tries to redeem the token.
+    
+    Returns (is_valid, mint_url or None).
     """
-    token_data = parse_cashu_token(token)
-    if not token_data:
+    if not validate_token_format(token):
         return False, None
     
-    # Extract mint URL and proofs from token
-    # Token format: {"token": [{"mint": "...", "proofs": [...]}]}
-    try:
-        token_entries = token_data.get("token", [])
-        if not token_entries:
-            print("[Payment] No token entries found")
-            return False, None
-        
-        mint_url = token_entries[0].get("mint")
-        proofs = token_entries[0].get("proofs", [])
-        
-        if not mint_url or not proofs:
-            print("[Payment] Missing mint URL or proofs")
-            return False, None
-        
-        # For NUT-07, we need to compute Y = hash_to_curve(secret) for each proof
-        # This requires the secp256k1 library which may not be available
-        # For now, we'll skip the checkstate validation and trust the token format
-        # TODO: Implement proper NUT-07 validation with hash_to_curve
-        
-        print(f"[Payment] Token appears valid: {len(proofs)} proofs from {mint_url}")
-        return True, mint_url
-        
-    except Exception as e:
-        print(f"[Payment] Token validation error: {e}")
-        return False, None
+    # We can't easily extract the mint URL from cashuB tokens without CBOR parsing
+    # Just return True with no mint URL - nutstash will handle the actual redemption
+    print("[Payment] Token format validated, will attempt redemption on success")
+    return True, None
 
 
 async def redeem_token_to_nutstash(token: str) -> bool:
@@ -231,19 +221,25 @@ async def validate_payment_node(state: AgentState) -> dict:
     
     token = payment["ecash_token"]
     
+    # DEV: Log full token for manual recovery if funds are lost
+    print(f"[Payment] ========== RECEIVED TOKEN (for recovery) ==========")
+    print(f"[Payment] {token}")
+    print(f"[Payment] ====================================================")
+    
     # Validate token format and check state
     is_valid, mint_url = await validate_token_state(token)
     
     if not is_valid:
-        print("[Payment] Token validation failed")
+        print("[Payment] Token validation failed - client should still have valid token")
+        print(f"[Payment] RECOVERY TOKEN: {token}")
         return {
             "payment_validated": False,
             "payment_token": None,
-            "refund": False,  # No refund needed - token was invalid
+            "refund": True,  # Signal refund - token format was bad but might still be valid
         }
     
     # Token is valid - store it for redemption after successful LLM processing
-    print(f"[Payment] Token validated, will redeem on success")
+    print(f"[Payment] Token validated from mint: {mint_url}, will redeem on success")
     return {
         "payment_validated": True,
         "payment_token": token,
@@ -261,7 +257,7 @@ async def chat_node(state: AgentState) -> dict:
     if not state.get("payment_validated", True):
         return {
             "messages": [AIMessage(content="Payment validation failed. Please try again with a valid ecash token.")],
-            "refund": False,
+            "refund": True,  # Changed to True - client should try to recover
         }
     
     token = state.get("payment_token")
@@ -274,16 +270,24 @@ async def chat_node(state: AgentState) -> dict:
         messages = [SystemMessage(content=system_prompt)] + state["messages"]
 
         # Generate response
+        print("[Payment] Invoking LLM...")
         response = await model.ainvoke(messages)
+        print("[Payment] LLM response received successfully")
         
         # SUCCESS - Now redeem the token
         if token:
+            print("[Payment] Attempting to redeem token to nutstash...")
             redeemed = await redeem_token_to_nutstash(token)
             if not redeemed:
                 # Redemption failed but LLM succeeded
-                # This is an edge case - we'll still return the response
-                # but log the issue for manual review
+                # Log full token for manual recovery
+                print("[Payment] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                 print("[Payment] WARNING: LLM succeeded but token redemption failed!")
+                print("[Payment] UNREDEEMED TOKEN - MANUAL RECOVERY NEEDED:")
+                print(f"[Payment] {token}")
+                print("[Payment] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            else:
+                print("[Payment] Token redeemed successfully")
         
         return {
             "messages": [response],
@@ -293,6 +297,11 @@ async def chat_node(state: AgentState) -> dict:
     except Exception as e:
         # FAILURE - Don't redeem, signal client to self-recover
         print(f"[Payment] LLM processing failed: {e}")
+        if token:
+            print("[Payment] ========== REFUNDABLE TOKEN ==========")
+            print(f"[Payment] {token}")
+            print("[Payment] Client should self-redeem this token")
+            print("[Payment] ========================================")
         return {
             "messages": [AIMessage(content=f"Sorry, I encountered an error processing your request. Your payment has not been taken - please try again.")],
             "refund": True,  # Signal client to self-redeem their token
