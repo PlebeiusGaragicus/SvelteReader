@@ -1,30 +1,36 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Message } from '@langchain/langgraph-sdk';
-	import { Bot, X, PanelRightClose, PanelRightOpen, SquarePen, AlertCircle } from '@lucide/svelte';
+	import { Bot, X, ChevronLeft, SquarePen, AlertCircle } from '@lucide/svelte';
+	import { cyphertap } from 'cyphertap';
 	import { useChatStore } from '$lib/stores/chat.svelte';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { checkHealth } from '$lib/services/langgraph';
 	import { DO_NOT_RENDER_ID_PREFIX } from '$lib/types/chat';
-	import type { PassageContext } from '$lib/types/chat';
+	import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 	import ChatInput from './ChatInput.svelte';
 	import HumanMessage from './messages/HumanMessage.svelte';
 	import AssistantMessage from './messages/AssistantMessage.svelte';
 	import ChatHistory from './ChatHistory.svelte';
 
+	type ViewMode = 'chat' | 'history';
+
 	interface Props {
 		onClose?: () => void;
 		passageContext?: PassageContext;
 		showHistory?: boolean;
+		initialThreadId?: string;
+		onThreadChange?: (threadId: string | null) => void;
+		generatePayment?: () => Promise<PaymentInfo | null>;
 	}
 
-	let { onClose, passageContext, showHistory = true }: Props = $props();
+	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, generatePayment }: Props = $props();
 
 	const chat = useChatStore();
 	const wallet = useWalletStore();
 
 	let messagesContainer = $state<HTMLDivElement | null>(null);
-	let historyOpen = $state(false);
+	let currentView = $state<ViewMode>('chat');
 	let hideToolCalls = $state(false);
 	let backendAvailable = $state<boolean | null>(null);
 
@@ -33,7 +39,7 @@
 		chat.messages.filter(m => !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX))
 	);
 
-	// Check backend health on mount
+	// Check backend health on mount and set up refund callback
 	onMount(() => {
 		checkHealth().then(available => {
 			backendAvailable = available;
@@ -41,6 +47,35 @@
 
 		// Load threads list
 		chat.loadThreads();
+
+		// Load initial thread if provided
+		if (initialThreadId) {
+			chat.loadThread(initialThreadId);
+		}
+		
+		// Set up refund callback for payment recovery
+		// This allows the chat store to refund tokens via CypherTap on errors
+		chat.setRefundCallback(async (token: string) => {
+			try {
+				console.log('[ChatThread] Attempting to refund token via CypherTap');
+				const result = await cyphertap.receiveEcashToken(token);
+				console.log(`[ChatThread] Refund successful: ${result.amount} sats returned`);
+				return result.success;
+			} catch (e) {
+				console.error('[ChatThread] Refund failed:', e);
+				return false;
+			}
+		});
+		
+		// Check for any pending payments that need recovery (e.g., from previous session)
+		chat.recoverPendingPayment();
+	});
+
+	// Notify parent when thread changes
+	$effect(() => {
+		if (onThreadChange && chat.threadId !== undefined) {
+			onThreadChange(chat.threadId);
+		}
 	});
 
 	// Auto-scroll to bottom when messages change
@@ -56,16 +91,6 @@
 	});
 
 	async function handleSubmit(content: string) {
-		// Create payment generator if wallet is available
-		const generatePayment = wallet.isLoggedIn
-			? async () => {
-				// This will be connected to actual CypherTap in the parent component
-				// For now, return null to skip payment (development mode)
-				console.log('Payment would be generated here');
-				return null;
-			}
-			: undefined;
-
 		await chat.submit(content, {
 			context: passageContext,
 			generatePayment,
@@ -79,78 +104,107 @@
 
 	function handleNewThread() {
 		chat.newThread();
+		currentView = 'chat';
+		onThreadChange?.(null);
 	}
 
 	function handleSelectThread(threadId: string) {
 		chat.loadThread(threadId);
-		historyOpen = false;
+		currentView = 'chat';
 	}
 
 	function handleDeleteThread(threadId: string) {
 		chat.deleteThread(threadId);
 	}
+
+	function goToHistory() {
+		currentView = 'history';
+	}
+
+	function goToChat() {
+		currentView = 'chat';
+	}
 </script>
 
 <div class="flex h-full flex-col bg-background">
-	<!-- Header -->
-	<div class="flex items-center justify-between border-b border-border px-4 py-3">
-		<div class="flex items-center gap-2">
-			{#if showHistory}
-				<button
-					onclick={() => historyOpen = !historyOpen}
-					class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-					title={historyOpen ? 'Close history' : 'Open history'}
-				>
-					{#if historyOpen}
-						<PanelRightOpen class="h-4 w-4" />
-					{:else}
-						<PanelRightClose class="h-4 w-4" />
-					{/if}
-				</button>
-			{/if}
-			
+	{#if currentView === 'history'}
+		<!-- History View -->
+		<div class="flex items-center justify-between border-b border-border px-4 py-3">
 			<div class="flex items-center gap-2">
-				<Bot class="h-5 w-5 text-primary" />
-				<h2 class="font-semibold">AI Chat</h2>
+				<h2 class="font-semibold">Chat History</h2>
 			</div>
-		</div>
 
-		<div class="flex items-center gap-2">
-			<button
-				onclick={handleNewThread}
-				class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-				title="New conversation"
-			>
-				<SquarePen class="h-4 w-4" />
-			</button>
-			
-			{#if onClose}
+			<div class="flex items-center gap-2">
 				<button
-					onclick={onClose}
+					onclick={handleNewThread}
 					class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
-					title="Close"
+					title="New conversation"
 				>
-					<X class="h-4 w-4" />
+					<SquarePen class="h-4 w-4" />
 				</button>
-			{/if}
-		</div>
-	</div>
-
-	<div class="flex flex-1 overflow-hidden">
-		<!-- History Sidebar -->
-		{#if showHistory && historyOpen}
-			<div class="w-64 border-r border-border">
-				<ChatHistory
-					threads={chat.threads}
-					currentThreadId={chat.threadId}
-					onSelectThread={handleSelectThread}
-					onDeleteThread={handleDeleteThread}
-					onNewThread={handleNewThread}
-				/>
+				
+				{#if onClose}
+					<button
+						onclick={onClose}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+						title="Close"
+					>
+						<X class="h-4 w-4" />
+					</button>
+				{/if}
 			</div>
-		{/if}
+		</div>
 
-		<!-- Main Chat Area -->
+		<div class="flex-1 overflow-hidden">
+			<ChatHistory
+				threads={chat.threads}
+				currentThreadId={chat.threadId}
+				onSelectThread={handleSelectThread}
+				onDeleteThread={handleDeleteThread}
+				onNewThread={handleNewThread}
+			/>
+		</div>
+	{:else}
+		<!-- Chat View -->
+		<div class="flex items-center justify-between border-b border-border px-4 py-3">
+			<div class="flex items-center gap-2">
+				{#if showHistory}
+					<button
+						onclick={goToHistory}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+						title="View chat history"
+					>
+						<ChevronLeft class="h-4 w-4" />
+					</button>
+				{/if}
+				
+				<div class="flex items-center gap-2">
+					<Bot class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">AI Chat</h2>
+				</div>
+			</div>
+
+			<div class="flex items-center gap-2">
+				<button
+					onclick={handleNewThread}
+					class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+					title="New conversation"
+				>
+					<SquarePen class="h-4 w-4" />
+				</button>
+				
+				{#if onClose}
+					<button
+						onclick={onClose}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
+						title="Close"
+					>
+						<X class="h-4 w-4" />
+					</button>
+				{/if}
+			</div>
+		</div>
+
 		<div class="flex flex-1 flex-col overflow-hidden">
 			<!-- Backend status warning -->
 			{#if backendAvailable === false}
@@ -246,5 +300,5 @@
 				/>
 			</div>
 		</div>
-	</div>
+	{/if}
 </div>

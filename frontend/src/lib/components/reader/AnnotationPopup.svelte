@@ -166,8 +166,8 @@
 
 <div
 	bind:this={popupElement}
-	class="annotation-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
-	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%);"
+	class="annotation-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover text-popover-foreground shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
+	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%); background-color: hsl(var(--popover)); color: hsl(var(--popover-foreground));"
 	role="dialog"
 	aria-label={isEditing ? "Edit annotation" : "Text selection options"}
 >
@@ -273,8 +273,8 @@
 	{/if}
 
 	<!-- Selected text preview -->
-	<div class="border-t border-border p-2">
-		<p class="line-clamp-2 text-xs italic text-muted-foreground">
+	<div class="border-t border-border p-2 max-w-xs">
+		<p class="line-clamp-2 text-xs italic text-muted-foreground break-words">
 			"{displayText.slice(0, 100)}{displayText.length > 100 ? '...' : ''}"
 		</p>
 	</div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { MessageSquare, Trash2, Plus } from '@lucide/svelte';
+	import { MessageSquare, Trash2 } from '@lucide/svelte';
 
 	interface ThreadInfo {
 		thread_id: string;
@@ -45,17 +45,6 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<div class="flex items-center justify-between border-b border-border p-3">
-		<h3 class="text-sm font-medium">History</h3>
-		<button
-			onclick={onNewThread}
-			class="inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-accent"
-			title="New conversation"
-		>
-			<Plus class="h-4 w-4" />
-		</button>
-	</div>
-
 	<div class="flex-1 overflow-y-auto p-2">
 		{#if threads.length === 0}
 			<div class="flex flex-col items-center justify-center py-8 text-center">

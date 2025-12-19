@@ -48,7 +48,7 @@
 	}
 </script>
 
-<div bind:this={panelElement} class="annotations-panel absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card shadow-lg">
+<div bind:this={panelElement} class="annotations-panel absolute inset-y-0 right-0 top-[53px] z-10 w-80 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: hsl(var(--card)); color: hsl(var(--card-foreground));">
 	<div class="flex items-center justify-between border-b border-border p-4">
 		<div>
 			<h2 class="font-semibold">Annotations</h2>

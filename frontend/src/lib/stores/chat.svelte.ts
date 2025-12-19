@@ -5,6 +5,9 @@
  * - Message state with streaming support
  * - Thread management
  * - Payment integration with CypherTap
+ * - Pending payment tracking for refund recovery
+ * 
+ * See docs/ecash-payment-flow.md for payment flow design.
  */
 
 import type { Message } from '@langchain/langgraph-sdk';
@@ -13,6 +16,13 @@ import { submitMessage, getThreadMessages, getThreads, deleteThread as deleteThr
 import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 
 const MESSAGE_COST_SATS = 1;
+const PAYMENT_TIMEOUT_MS = 60000; // 1 minute timeout for payment recovery
+
+interface PendingPayment {
+	token: string;
+	messageId: string;
+	timestamp: number;
+}
 
 interface ChatState {
 	messages: Message[];
@@ -21,6 +31,7 @@ interface ChatState {
 	isStreaming: boolean;
 	error: string | null;
 	threads: Array<{ thread_id: string; created_at?: string; metadata?: Record<string, unknown> }>;
+	pendingPayment: PendingPayment | null;
 }
 
 function createChatStore() {
@@ -31,6 +42,10 @@ function createChatStore() {
 	let error = $state<string | null>(null);
 	let threads = $state<Array<{ thread_id: string; created_at?: string; metadata?: Record<string, unknown> }>>([]);
 	let streamingContent = $state('');
+	let pendingPayment = $state<PendingPayment | null>(null);
+	
+	// Refund callback - set by component that has access to CypherTap
+	let refundCallback: ((token: string) => Promise<boolean>) | null = null;
 
 	async function submit(
 		content: string,
@@ -46,6 +61,8 @@ function createChatStore() {
 		isStreaming = true;
 		streamingContent = '';
 
+		const messageId = uuidv4();
+
 		// Generate payment if callback provided
 		let payment: PaymentInfo | undefined;
 		if (options?.generatePayment) {
@@ -58,6 +75,16 @@ function createChatStore() {
 					return false;
 				}
 				payment = paymentResult;
+				
+				// Store pending payment for potential refund recovery
+				if (paymentResult.ecash_token) {
+					pendingPayment = {
+						token: paymentResult.ecash_token,
+						messageId,
+						timestamp: Date.now(),
+					};
+					console.log('[Chat] Stored pending payment for refund recovery');
+				}
 			} catch (e) {
 				error = `Payment error: ${(e as Error).message}`;
 				isLoading = false;
@@ -68,7 +95,7 @@ function createChatStore() {
 
 		// Add optimistic human message
 		const humanMessage: Message = {
-			id: uuidv4(),
+			id: messageId,
 			type: 'human',
 			content: content,
 		};
@@ -113,12 +140,17 @@ function createChatStore() {
 						// Replace with final state from server
 						messages = finalMessages;
 						isStreaming = false;
+						// Success - clear pending payment (it was redeemed by agent)
+						pendingPayment = null;
+						console.log('[Chat] Message successful, pending payment cleared');
 					},
 					onError: (err) => {
 						error = err.message;
 						// Remove the placeholder AI message on error
 						messages = messages.filter(m => m.id !== aiMessageId);
 						isStreaming = false;
+						// Attempt refund on error
+						attemptRefund('onError callback');
 					},
 					onThreadId: (id) => {
 						threadId = id;
@@ -137,8 +169,68 @@ function createChatStore() {
 			messages = messages.filter(m => m.id !== aiMessageId);
 			isLoading = false;
 			isStreaming = false;
+			// Attempt refund on error
+			await attemptRefund('catch block');
 			return false;
 		}
+	}
+	
+	/**
+	 * Attempt to refund a pending payment by calling the refund callback.
+	 * The callback should use cyphertap.receiveEcashToken() to reclaim funds.
+	 */
+	async function attemptRefund(reason: string): Promise<boolean> {
+		if (!pendingPayment) {
+			console.log('[Chat] No pending payment to refund');
+			return false;
+		}
+		
+		const token = pendingPayment.token;
+		console.log(`[Chat] Attempting refund (${reason}): token exists`);
+		
+		if (refundCallback) {
+			try {
+				const success = await refundCallback(token);
+				if (success) {
+					console.log('[Chat] Refund successful - funds returned to wallet');
+					pendingPayment = null;
+					return true;
+				} else {
+					console.warn('[Chat] Refund callback returned false');
+				}
+			} catch (e) {
+				console.error('[Chat] Refund failed:', e);
+			}
+		} else {
+			console.warn('[Chat] No refund callback set - cannot auto-refund');
+		}
+		
+		// Keep pending payment for manual recovery
+		return false;
+	}
+	
+	/**
+	 * Set the refund callback. Should be called by component with CypherTap access.
+	 */
+	function setRefundCallback(callback: (token: string) => Promise<boolean>): void {
+		refundCallback = callback;
+	}
+	
+	/**
+	 * Manually trigger refund recovery for any pending payments.
+	 * Useful for recovering from timeouts or app restarts.
+	 */
+	async function recoverPendingPayment(): Promise<boolean> {
+		if (!pendingPayment) return false;
+		
+		// Check if payment is old enough to consider timed out
+		const age = Date.now() - pendingPayment.timestamp;
+		if (age < PAYMENT_TIMEOUT_MS) {
+			console.log(`[Chat] Pending payment is only ${age}ms old, not recovering yet`);
+			return false;
+		}
+		
+		return attemptRefund('timeout recovery');
 	}
 
 	async function loadThread(id: string): Promise<void> {
@@ -210,6 +302,7 @@ function createChatStore() {
 		get error() { return error; },
 		get threads() { return threads; },
 		get streamingContent() { return streamingContent; },
+		get pendingPayment() { return pendingPayment; },
 		
 		submit,
 		loadThread,
@@ -218,6 +311,8 @@ function createChatStore() {
 		deleteThread,
 		clearError,
 		stop,
+		setRefundCallback,
+		recoverPendingPayment,
 		
 		setThreadId: (id: string | null) => { threadId = id; },
 	};

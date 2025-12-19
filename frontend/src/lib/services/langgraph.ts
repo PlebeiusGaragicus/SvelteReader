@@ -127,7 +127,8 @@ export async function submitMessage(
  */
 export async function getThreads(): Promise<Thread[]> {
 	const client = getClient();
-	const threads = await client.threads.list();
+	// SDK uses search() not list()
+	const threads = await client.threads.search(); // TODO: add filtering
 	return threads;
 }
 
@@ -169,11 +170,15 @@ export async function createThread(metadata?: Record<string, unknown>): Promise<
  */
 export async function checkHealth(): Promise<boolean> {
 	try {
-		const client = getClient();
-		// Try to list assistants as a health check
-		await client.assistants.list();
-		return true;
-	} catch {
+		const url = import.meta.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
+		// Use a simple fetch to /ok endpoint which is the standard LangGraph health check
+		const response = await fetch(`${url}/ok`, {
+			method: 'GET',
+			headers: { 'Accept': 'application/json' },
+		});
+		return response.ok;
+	} catch (error) {
+		console.warn('LangGraph health check failed:', error);
 		return false;
 	}
 }

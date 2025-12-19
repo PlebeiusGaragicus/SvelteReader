@@ -20,6 +20,8 @@
 	} from '$lib/components/reader';
 	import { ChatThread } from '$lib/components/chat';
 	import type { PassageContext } from '$lib/types/chat';
+	import { cyphertap } from 'cyphertap';
+	import { useWalletStore } from '$lib/stores/wallet.svelte';
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
@@ -53,6 +55,22 @@
 
 	// AI Chat state - passage context for the chat
 	let chatPassageContext = $state<PassageContext | null>(null);
+
+	// Wallet store for payment integration
+	const wallet = useWalletStore();
+
+	// Sync wallet state with CypherTap
+	$effect(() => {
+		wallet.syncWithCypherTap({
+			balance: cyphertap.balance,
+			isReady: cyphertap.isReady,
+			isLoggedIn: cyphertap.isLoggedIn,
+			npub: cyphertap.npub
+		});
+	});
+
+	// Payment generator for chat messages
+	const generatePayment = wallet.createPaymentGenerator(cyphertap);
 
 	// Apply theme when mode changes
 	$effect(() => {
@@ -420,11 +438,16 @@
 		{/if}
 
 		{#if showAIChat}
-			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card shadow-lg">
+			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: hsl(var(--card)); color: hsl(var(--card-foreground));">
 				<ChatThread
 					onClose={() => { showAIChat = false; chatPassageContext = null; }}
 					passageContext={chatPassageContext || undefined}
 					showHistory={true}
+					{generatePayment}
+					onThreadChange={(threadId) => {
+						// Could persist threadId to book metadata here if needed
+						console.log('Thread changed:', threadId);
+					}}
 				/>
 			</div>
 		{/if}
