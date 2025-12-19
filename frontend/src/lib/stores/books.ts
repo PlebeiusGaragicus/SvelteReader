@@ -1,8 +1,14 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
+import {
+	storeEpubData as storeEpubToIDB,
+	getEpubData as getEpubFromIDB,
+	removeEpubData as removeEpubFromIDB,
+	storeLocations,
+	getLocations
+} from '$lib/services/storageService';
 
 const STORAGE_KEY = 'sveltereader-books';
-const EPUB_STORAGE_KEY = 'sveltereader-epubs';
 
 export interface Book {
 	id: string;
@@ -58,44 +64,11 @@ function saveBooksToStorage(books: Book[]) {
 	}
 }
 
-export async function storeEpubData(bookId: string, arrayBuffer: ArrayBuffer): Promise<void> {
-	if (!browser) return;
-	try {
-		const base64 = btoa(
-			new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-		);
-		localStorage.setItem(`${EPUB_STORAGE_KEY}-${bookId}`, base64);
-	} catch (e) {
-		console.error('Failed to store EPUB data:', e);
-	}
-}
-
-export async function getEpubData(bookId: string): Promise<ArrayBuffer | null> {
-	if (!browser) return null;
-	try {
-		const base64 = localStorage.getItem(`${EPUB_STORAGE_KEY}-${bookId}`);
-		if (!base64) return null;
-
-		const binaryString = atob(base64);
-		const bytes = new Uint8Array(binaryString.length);
-		for (let i = 0; i < binaryString.length; i++) {
-			bytes[i] = binaryString.charCodeAt(i);
-		}
-		return bytes.buffer;
-	} catch (e) {
-		console.error('Failed to get EPUB data:', e);
-		return null;
-	}
-}
-
-export function removeEpubData(bookId: string): void {
-	if (!browser) return;
-	try {
-		localStorage.removeItem(`${EPUB_STORAGE_KEY}-${bookId}`);
-	} catch (e) {
-		console.error('Failed to remove EPUB data:', e);
-	}
-}
+// Re-export storage functions from IndexedDB service
+export const storeEpubData = storeEpubToIDB;
+export const getEpubData = getEpubFromIDB;
+export const removeEpubData = removeEpubFromIDB;
+export { storeLocations, getLocations };
 
 function createBooksStore() {
 	const initialBooks = loadBooksFromStorage();
@@ -113,7 +86,7 @@ function createBooksStore() {
 			return id;
 		},
 		removeBook: (id: string) => {
-			removeEpubData(id);
+			removeEpubFromIDB(id);
 			update((books) => {
 				const newBooks = books.filter((b) => b.id !== id);
 				saveBooksToStorage(newBooks);
