@@ -116,7 +116,7 @@ cd agent
 pip install -e . "langgraph-cli[inmem]"
 cp .env.example .env
 # Configure your LLM endpoint in .env
-langgraph dev
+langgraph dev --no-browser
 ```
 
 ### 2. Start the FastAPI Backend

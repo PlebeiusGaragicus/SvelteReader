@@ -83,3 +83,22 @@ See individual README files in each directory for detailed development instructi
 - [Frontend README](frontend/README.md)
 - [Backend README](backend/README.md)
 - [Agent README](agent/README.md)
+
+
+---
+
+```sh
+# / frontend
+git submodule update --init --recursive
+npm run dev
+
+
+# /agent
+pip install -e . "langgraph-cli[inmem]"
+langgraph dev --no-browser
+
+
+# /backend
+pip install -e .
+uvicorn src.main:app --reload --port 8000
+```
