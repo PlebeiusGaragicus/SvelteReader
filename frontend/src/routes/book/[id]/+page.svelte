@@ -5,7 +5,7 @@
 	import { mode } from 'mode-watcher';
 	import { books } from '$lib/stores/books';
 	import { getEpubData } from '$lib/services/storageService';
-	import { epubService } from '$lib/services/epubService';
+	import { epubService, type ChapterPosition } from '$lib/services/epubService';
 	import type { TocItem, LocationInfo } from '$lib/types';
 	import { AppError, ERROR_MESSAGES } from '$lib/types';
 	import { Loader2 } from '@lucide/svelte';
@@ -34,6 +34,12 @@
 	let toc = $state<TocItem[]>([]);
 	let currentLocation = $state<LocationInfo | null>(null);
 	let isBookReady = $state(false);
+	let chapters = $state<ChapterPosition[]>([]);
+	let chaptersReady = $state(false);
+
+	// Return to last location state
+	let lastLocationCfi = $state<string | null>(null);
+	let returnTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// Apply theme when mode changes
 	$effect(() => {
@@ -93,8 +99,9 @@
 			isBookReady = true;
 			isLoading = false;
 
-			// Load table of contents
+			// Load table of contents and chapter positions
 			toc = await epubService.getTableOfContents();
+			chapters = await epubService.getChapterPositions();
 
 			// Track location changes
 			epubService.onRelocated((location) => {
@@ -105,9 +112,15 @@
 			// Get initial location
 			currentLocation = epubService.getCurrentLocation();
 
-			// Update location when accurate locations become available
-			epubService.setOnLocationsReady(() => {
+			// Update location and chapter positions when accurate locations become available
+			epubService.setOnLocationsReady(async () => {
+				console.log('Locations ready, recalculating chapters...');
 				currentLocation = epubService.getCurrentLocation();
+				// Recalculate chapter positions with accurate location data
+				const newChapters = await epubService.getChapterPositions();
+				console.log('New chapter positions:', newChapters);
+				chapters = newChapters;
+				chaptersReady = true;
 			});
 		} catch (error) {
 			handleError(error);
@@ -117,6 +130,9 @@
 	onDestroy(() => {
 		setReadingMode(false);
 		epubService.destroy();
+		if (returnTimeout) {
+			clearTimeout(returnTimeout);
+		}
 	});
 
 	function handlePrevPage(): void {
@@ -130,6 +146,38 @@
 	function handleTocClick(item: TocItem): void {
 		epubService.goToHref(item.href);
 		showTOC = false;
+	}
+
+	function handleChapterClick(href: string): void {
+		// Save current location before jumping
+		const current = epubService.getCurrentLocation();
+		if (current) {
+			lastLocationCfi = current.cfi;
+			
+			// Clear any existing timeout
+			if (returnTimeout) {
+				clearTimeout(returnTimeout);
+			}
+			
+			// Auto-hide after 10 seconds
+			returnTimeout = setTimeout(() => {
+				lastLocationCfi = null;
+			}, 10000);
+		}
+		
+		epubService.goToHref(href);
+	}
+
+	function handleReturnToLastLocation(): void {
+		if (lastLocationCfi) {
+			epubService.goToCfi(lastLocationCfi);
+			lastLocationCfi = null;
+			
+			if (returnTimeout) {
+				clearTimeout(returnTimeout);
+				returnTimeout = null;
+			}
+		}
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
@@ -214,6 +262,10 @@
 			fallbackProgress={book.progress}
 			fallbackCurrentPage={book.currentPage}
 			fallbackTotalPages={book.totalPages}
+			chapters={chaptersReady ? chapters : []}
+			onChapterClick={handleChapterClick}
+			{lastLocationCfi}
+			onReturnToLastLocation={handleReturnToLastLocation}
 		/>
 
 		{#if showTOC}

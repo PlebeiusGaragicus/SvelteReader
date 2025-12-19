@@ -13,6 +13,13 @@ export interface ParsedBook {
 	arrayBuffer: ArrayBuffer;
 }
 
+export interface ChapterPosition {
+	href: string;
+	label: string;
+	startPercent: number;
+	endPercent: number;
+}
+
 // Constants for page estimation
 const ESTIMATED_PAGES_PER_CHAPTER = 20;
 const MIN_ESTIMATED_PAGES = 100;
@@ -236,6 +243,102 @@ class EpubService {
 
 		const navigation = await this.book.loaded.navigation;
 		return this.convertNavItems(navigation.toc);
+	}
+
+	async getChapterPositions(): Promise<ChapterPosition[]> {
+		if (!this.book) return [];
+
+		const navigation = await this.book.loaded.navigation;
+		const spine = this.book.spine as any;
+		const spineItems = spine?.items || [];
+		const spineLength = spineItems.length || 1;
+
+		// Create a map of href to spine index for fallback position calculation
+		const hrefToIndex = new Map<string, number>();
+		spineItems.forEach((item: any, index: number) => {
+			const baseHref = item.href?.split('#')[0];
+			if (baseHref && !hrefToIndex.has(baseHref)) {
+				hrefToIndex.set(baseHref, index);
+			}
+		});
+
+		// Build a map of spine index to location percentage by scanning the locations
+		const spineToPercent = new Map<number, number>();
+		if (this.locationsReady && this.book && this.totalLocations > 0) {
+			const locations = (this.book.locations as any)._locations as string[];
+			if (locations && locations.length > 0) {
+				// Scan through locations to find the first location for each spine item
+				let lastSpineIndex = -1;
+				for (let i = 0; i < locations.length; i++) {
+					const cfi = locations[i];
+					// Extract spine index from CFI - format is like "epubcfi(/6/8!/4/...)" where 8 is spine*2+2
+					const match = cfi.match(/epubcfi\(\/6\/(\d+)/);
+					if (match) {
+						const cfiSpineNum = parseInt(match[1], 10);
+						const spineIndex = (cfiSpineNum - 2) / 2; // Convert CFI spine number to index
+						if (spineIndex !== lastSpineIndex && spineIndex >= 0) {
+							const percent = (i / this.totalLocations) * 100;
+							spineToPercent.set(spineIndex, percent);
+							lastSpineIndex = spineIndex;
+						}
+					}
+				}
+			}
+		}
+
+		// First pass: collect all chapter start positions
+		const rawPositions: { href: string; label: string; startPercent: number }[] = [];
+		
+		const flattenToc = (items: TocItem[]): void => {
+			for (const item of items) {
+				let startPercent: number | undefined;
+
+				const baseHref = item.href?.split('#')[0];
+				const spineIndex = hrefToIndex.get(baseHref);
+				
+				// Try to get accurate percentage from our pre-computed map
+				if (spineIndex !== undefined && spineToPercent.has(spineIndex)) {
+					startPercent = spineToPercent.get(spineIndex);
+				}
+
+				// Fallback: use spine index (gives roughly equal segments)
+				if (startPercent === undefined && spineIndex !== undefined) {
+					startPercent = (spineIndex / spineLength) * 100;
+				}
+
+				if (startPercent !== undefined) {
+					rawPositions.push({
+						href: item.href,
+						label: item.label,
+						startPercent
+					});
+				}
+				
+				if (item.subitems) {
+					flattenToc(item.subitems);
+				}
+			}
+		};
+
+		flattenToc(this.convertNavItems(navigation.toc));
+
+		// Sort by start position
+		rawPositions.sort((a, b) => a.startPercent - b.startPercent);
+
+		// Second pass: calculate end positions (next chapter's start or 100%)
+		const positions: ChapterPosition[] = rawPositions.map((pos, index) => {
+			const nextStart = index < rawPositions.length - 1 
+				? rawPositions[index + 1].startPercent 
+				: 100;
+			return {
+				href: pos.href,
+				label: pos.label,
+				startPercent: pos.startPercent,
+				endPercent: nextStart
+			};
+		});
+
+		return positions;
 	}
 
 	private convertNavItems(items: NavItem[]): TocItem[] {
