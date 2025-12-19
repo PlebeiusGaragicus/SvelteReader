@@ -1,16 +1,15 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import {
-	storeEpubData as storeEpubToIDB,
-	getEpubData as getEpubFromIDB,
-	removeEpubData as removeEpubFromIDB,
-	storeLocations,
-	getLocations
-} from '$lib/services/storageService';
+import { removeEpubData } from '$lib/services/storageService';
+import type { Book, Annotation } from '$lib/types';
+import { AppError } from '$lib/types';
+
+// Re-export types for backward compatibility
+export type { Book, Annotation } from '$lib/types';
 
 const STORAGE_KEY = 'sveltereader-books';
 
-export interface Book {
+interface StoredBook {
 	id: string;
 	title: string;
 	author: string;
@@ -18,20 +17,20 @@ export interface Book {
 	progress: number;
 	totalPages: number;
 	currentPage: number;
-	lastRead?: Date;
-	annotations: Annotation[];
+	lastRead?: string;
+	annotations: Array<Omit<Annotation, 'createdAt'> & { createdAt: string }>;
 	currentCfi?: string;
 }
 
-export interface Annotation {
-	id: string;
-	bookId: string;
-	text: string;
-	note?: string;
-	chapter?: string;
-	page: number;
-	color: 'yellow' | 'green' | 'blue' | 'pink';
-	createdAt: Date;
+function deserializeBook(stored: StoredBook): Book {
+	return {
+		...stored,
+		lastRead: stored.lastRead ? new Date(stored.lastRead) : undefined,
+		annotations: stored.annotations.map((a) => ({
+			...a,
+			createdAt: new Date(a.createdAt)
+		}))
+	};
 }
 
 function loadBooksFromStorage(): Book[] {
@@ -39,36 +38,30 @@ function loadBooksFromStorage(): Book[] {
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
 		if (stored) {
-			const books = JSON.parse(stored);
-			return books.map((b: any) => ({
-				...b,
-				lastRead: b.lastRead ? new Date(b.lastRead) : undefined,
-				annotations: b.annotations.map((a: any) => ({
-					...a,
-					createdAt: new Date(a.createdAt)
-				}))
-			}));
+			const books: StoredBook[] = JSON.parse(stored);
+			return books.map(deserializeBook);
 		}
 	} catch (e) {
 		console.error('Failed to load books from storage:', e);
+		// Don't throw - return empty array and let user re-import
 	}
 	return [];
 }
 
-function saveBooksToStorage(books: Book[]) {
+function saveBooksToStorage(books: Book[]): void {
 	if (!browser) return;
 	try {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
 	} catch (e) {
 		console.error('Failed to save books to storage:', e);
+		// Storage quota exceeded or other error
+		throw new AppError(
+			'Failed to save book data. Your browser storage may be full.',
+			'STORAGE_WRITE_FAILED',
+			true
+		);
 	}
 }
-
-// Re-export storage functions from IndexedDB service
-export const storeEpubData = storeEpubToIDB;
-export const getEpubData = getEpubFromIDB;
-export const removeEpubData = removeEpubFromIDB;
-export { storeLocations, getLocations };
 
 function createBooksStore() {
 	const initialBooks = loadBooksFromStorage();
@@ -86,7 +79,7 @@ function createBooksStore() {
 			return id;
 		},
 		removeBook: (id: string) => {
-			removeEpubFromIDB(id);
+			removeEpubData(id);
 			update((books) => {
 				const newBooks = books.filter((b) => b.id !== id);
 				saveBooksToStorage(newBooks);

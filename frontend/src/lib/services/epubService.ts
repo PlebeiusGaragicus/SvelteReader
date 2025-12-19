@@ -1,13 +1,11 @@
 import ePub, { Book, Rendition } from 'epubjs';
 import type { NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
+import type { BookMetadata, TocItem, LocationInfo } from '$lib/types';
+import { AppError } from '$lib/types';
 
-export interface BookMetadata {
-	title: string;
-	author: string;
-	coverUrl?: string;
-	totalPages: number;
-}
+// Re-export types for backward compatibility
+export type { BookMetadata, TocItem, LocationInfo } from '$lib/types';
 
 export interface ParsedBook {
 	metadata: BookMetadata;
@@ -15,19 +13,10 @@ export interface ParsedBook {
 	arrayBuffer: ArrayBuffer;
 }
 
-export interface TocItem {
-	id: string;
-	href: string;
-	label: string;
-	subitems?: TocItem[];
-}
-
-export interface LocationInfo {
-	cfi: string;
-	percentage: number;
-	page: number;
-	totalPages: number;
-}
+// Constants for page estimation
+const ESTIMATED_PAGES_PER_CHAPTER = 20;
+const MIN_ESTIMATED_PAGES = 100;
+const LOCATIONS_CHARS_PER_PAGE = 1024;
 
 class EpubService {
 	private book: Book | null = null;
@@ -60,7 +49,10 @@ class EpubService {
 		// Estimate total pages based on spine items (chapters)
 		// This is a rough estimate - actual page count depends on rendering
 		const spineItems = (spine as any).items || [];
-		const totalPages = Math.max(spineItems.length * 20, 100); // Rough estimate
+		const totalPages = Math.max(
+			spineItems.length * ESTIMATED_PAGES_PER_CHAPTER,
+			MIN_ESTIMATED_PAGES
+		);
 
 		return {
 			metadata: {
@@ -96,9 +88,18 @@ class EpubService {
 
 	async loadBook(arrayBuffer: ArrayBuffer): Promise<Book> {
 		this.destroy();
-		this.book = ePub(arrayBuffer);
-		await this.book.ready;
-		return this.book;
+		try {
+			this.book = ePub(arrayBuffer);
+			await this.book.ready;
+			return this.book;
+		} catch (e) {
+			console.error('Failed to load EPUB:', e);
+			throw new AppError(
+				'Failed to load the book. The file may be corrupted.',
+				'EPUB_PARSE_FAILED',
+				true
+			);
+		}
 	}
 
 	async renderBook(
@@ -203,7 +204,7 @@ class EpubService {
 
 			// Generate locations in background
 			console.log('Generating locations...');
-			const locations = await this.book.locations.generate(1024);
+			const locations = await this.book.locations.generate(LOCATIONS_CHARS_PER_PAGE);
 			this.totalLocations = this.book.locations.length();
 			this.locationsReady = true;
 			this.onLocationsReady?.();
