@@ -97,6 +97,10 @@ class LangGraphClient:
         Yields:
             Stream events from the agent
         """
+        # Track accumulated content to compute deltas
+        # messages/partial contains full content so far, not just new tokens
+        last_content_length: dict[str, int] = {}
+
         async for chunk in self.client.runs.stream(
             thread_id=thread_id,
             assistant_id=self.assistant_id,
@@ -105,13 +109,21 @@ class LangGraphClient:
         ):
             # Process different event types
             if chunk.event == "messages/partial":
-                # Streaming token from LLM
+                # Streaming token from LLM - content is accumulated, not delta
                 for msg in chunk.data:
                     if msg.get("type") == "ai" and msg.get("content"):
-                        yield {
-                            "type": "token",
-                            "content": msg["content"],
-                        }
+                        msg_id = msg.get("id", "default")
+                        content = msg["content"]
+                        prev_length = last_content_length.get(msg_id, 0)
+
+                        # Only yield the new portion (delta)
+                        if len(content) > prev_length:
+                            delta = content[prev_length:]
+                            last_content_length[msg_id] = len(content)
+                            yield {
+                                "type": "token",
+                                "content": delta,
+                            }
 
             elif chunk.event == "messages/complete":
                 # Complete message
