@@ -38,4 +38,5 @@ markdown_extensions:
 nav:
   - Overview: index.md
   - Architecture: architecture.md
+  - Deployment: deployment.md
   - Testing: testing.md

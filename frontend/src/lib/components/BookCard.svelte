@@ -31,7 +31,7 @@
 			/>
 		{:else}
 			<div class="flex h-full w-full items-center justify-center">
-				<BookOpen class="h-16 w-16 text-muted-foreground" />
+				<BookOpen class="h-10 w-10 text-muted-foreground" />
 			</div>
 		{/if}
 
@@ -72,11 +72,11 @@
 		</div>
 	</div>
 
-	<div class="p-4">
-		<h3 class="mb-1 line-clamp-2 text-sm font-semibold">{book.title}</h3>
+	<div class="p-2">
+		<h3 class="mb-0.5 line-clamp-2 text-xs font-semibold">{book.title}</h3>
 		<p class="line-clamp-1 text-xs text-muted-foreground">{book.author}</p>
 		{#if book.progress > 0}
-			<p class="mt-2 text-xs text-muted-foreground">{Math.round(book.progress)}% complete</p>
+			<p class="mt-1 text-xs text-muted-foreground">{Math.round(book.progress)}%</p>
 		{/if}
 	</div>
 </a>
