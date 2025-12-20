@@ -1,7 +1,14 @@
+wallet_db
+
 node_modules/
 dist/
 package-lock.json
 
+__pycache__/
+*venv/
+*.egg-info/
+
+.langgraph_api/
 .env
 
 .DS_Store

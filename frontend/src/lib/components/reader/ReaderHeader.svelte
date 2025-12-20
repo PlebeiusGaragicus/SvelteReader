@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { ArrowLeft, List, Highlighter, Settings } from '@lucide/svelte';
+	import { ArrowLeft, List, Highlighter, Bot, Settings } from '@lucide/svelte';
 
 	interface Props {
 		title: string;
 		showTOC: boolean;
 		showAnnotations: boolean;
+		showAIChat: boolean;
 		showSettings: boolean;
 		onToggleTOC: () => void;
 		onToggleAnnotations: () => void;
+		onToggleAIChat: () => void;
 		onToggleSettings: () => void;
 	}
 
@@ -16,9 +18,11 @@
 		title,
 		showTOC,
 		showAnnotations,
+		showAIChat,
 		showSettings,
 		onToggleTOC,
 		onToggleAnnotations,
+		onToggleAIChat,
 		onToggleSettings
 	}: Props = $props();
 </script>
@@ -50,6 +54,13 @@
 			aria-label="Annotations"
 		>
 			<Highlighter class="h-5 w-5" />
+		</button>
+		<button
+			onclick={onToggleAIChat}
+			class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showAIChat ? 'bg-accent text-blue-500' : ''}"
+			aria-label="AI Chat"
+		>
+			<Bot class="h-5 w-5" />
 		</button>
 		<button
 			onclick={onToggleSettings}

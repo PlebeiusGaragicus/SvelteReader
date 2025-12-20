@@ -1,18 +1,25 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { MessageSquare, Trash2, X } from '@lucide/svelte';
+	import { MessageSquare, Trash2, X, Bot } from '@lucide/svelte';
 	import type { Annotation, AnnotationColor } from '$lib/types';
+	import { getAnnotationDisplayColor, annotationHasHighlight, annotationHasChat } from '$lib/types';
 
 	interface Props {
 		annotation: Annotation;
 		position: { x: number; y: number };
-		onUpdateColor: (color: AnnotationColor) => void;
+		onUpdateColor: (color: AnnotationColor | null) => void;
 		onUpdateNote: (note: string | undefined) => void;
 		onDelete: () => void;
 		onClose: () => void;
+		onOpenAIChat?: () => void;
 	}
 
-	let { annotation, position, onUpdateColor, onUpdateNote, onDelete, onClose }: Props = $props();
+	let { annotation, position, onUpdateColor, onUpdateNote, onDelete, onClose, onOpenAIChat }: Props = $props();
+	
+	// Derived state from composable properties
+	const currentHighlightColor = $derived(getAnnotationDisplayColor(annotation));
+	const hasHighlight = $derived(annotationHasHighlight(annotation));
+	const hasChat = $derived(annotationHasChat(annotation));
 
 	let showNoteInput = $state(false);
 	let noteText = $state('');
@@ -75,7 +82,14 @@
 	});
 
 	function handleColorClick(color: AnnotationColor) {
-		if (color !== annotation.color) {
+		if (color === currentHighlightColor) {
+			// Clicking same color - toggle off (but only delete if no other content)
+			if (!annotation.note && !annotation.chatThreadId) {
+				onDelete();
+			} else {
+				onUpdateColor(null);  // Remove highlight but keep annotation
+			}
+		} else {
 			onUpdateColor(color);
 		}
 	}
@@ -114,19 +128,19 @@
 
 <div
 	bind:this={popupElement}
-	class="annotation-edit-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
-	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%);"
+	class="annotation-edit-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover text-popover-foreground shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
+	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%); background-color: var(--popover); color: var(--popover-foreground);"
 	role="dialog"
 	aria-label="Edit annotation"
 >
 	<!-- Main toolbar -->
 	<div class="flex items-center gap-1 p-2">
-		<!-- Highlight colors with X on selected to toggle off (only for highlight type, not note-only) -->
+		<!-- Highlight colors with X on selected to toggle off -->
 		<div class="flex items-center gap-1 border-r border-border pr-2">
 			{#each colors as { color, bg, ring }}
-				{@const isSelected = annotation.color === color && annotation.type === 'highlight'}
+				{@const isSelected = currentHighlightColor === color}
 				<button
-					onclick={() => isSelected ? onDelete() : handleColorClick(color)}
+					onclick={() => handleColorClick(color)}
 					class="relative h-6 w-6 rounded-full transition-transform hover:scale-110 {bg} {isSelected ? `ring-2 ${ring}` : ''}"
 					aria-label={isSelected ? "Remove highlight" : `Highlight ${color}`}
 					title={isSelected ? "Remove highlight" : `Highlight ${color}`}
@@ -148,15 +162,27 @@
 			<MessageSquare class="h-4 w-4" />
 		</button>
 
-		<!-- Delete button -->
-		<button
-			onclick={onDelete}
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
-			aria-label="Delete annotation"
-			title="Delete annotation"
-		>
-			<Trash2 class="h-4 w-4" />
-		</button>
+		{#if annotation.note}
+			<!-- AI Chat button (shown when annotation has a note) -->
+			<button
+				onclick={() => onOpenAIChat?.()}
+				class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-500 transition-colors hover:bg-blue-500/10"
+				aria-label="AI Chat"
+				title="AI Chat with this context"
+			>
+				<Bot class="h-4 w-4" />
+			</button>
+		{:else}
+			<!-- Delete button (shown when no note) -->
+			<button
+				onclick={onDelete}
+				class="inline-flex h-8 w-8 items-center justify-center rounded-md text-destructive transition-colors hover:bg-destructive/10"
+				aria-label="Delete annotation"
+				title="Delete annotation"
+			>
+				<Trash2 class="h-4 w-4" />
+			</button>
+		{/if}
 
 		<!-- Close button -->
 		<button
@@ -180,16 +206,26 @@
 				rows="3"
 			></textarea>
 			<div class="mt-2 flex justify-between">
-				{#if annotation.note}
+				<div class="flex gap-1">
+					{#if annotation.note}
+						<button
+							onclick={handleDeleteNote}
+							class="rounded-md px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+						>
+							Remove note
+						</button>
+					{/if}
+					<!-- Delete annotation button in note view -->
 					<button
-						onclick={handleDeleteNote}
-						class="rounded-md px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+						onclick={onDelete}
+						class="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+						aria-label="Delete annotation"
+						title="Delete annotation"
 					>
-						Remove note
+						<Trash2 class="h-3 w-3" />
+						Delete
 					</button>
-				{:else}
-					<div></div>
-				{/if}
+				</div>
 				<div class="flex gap-2">
 					<button
 						onclick={() => (showNoteInput = false)}
