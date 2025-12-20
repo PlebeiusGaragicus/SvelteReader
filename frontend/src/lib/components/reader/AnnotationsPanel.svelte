@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X, Highlighter, MessageSquare, Trash2 } from '@lucide/svelte';
-	import type { Annotation, AnnotationColor, AnnotationType } from '$lib/types';
+	import { X, Highlighter, MessageSquare, Trash2, Bot } from '@lucide/svelte';
+	import type { Annotation, AnnotationColor } from '$lib/types';
+	import { annotationHasHighlight, annotationHasNote, annotationHasChat, getAnnotationDisplayColor } from '$lib/types';
 
 	interface Props {
 		annotations: Annotation[];
@@ -31,20 +32,36 @@
 		};
 	});
 
-	function getColorClass(color: AnnotationColor, type: AnnotationType): string {
-		if (type === 'note') {
-			return 'bg-transparent border-green-500 border-2';
-		} else if (type === 'ai-chat') {
-			return 'bg-transparent border-blue-500 border-2';
+	// Get visual style based on composable properties
+	function getColorClass(annotation: Annotation): string {
+		const displayColor = getAnnotationDisplayColor(annotation);
+		const hasChat = annotationHasChat(annotation);
+		const hasNote = annotationHasNote(annotation);
+		
+		// Build border classes based on what the annotation has
+		let borderClass = '';
+		if (hasChat) {
+			borderClass = 'border-blue-500 border-2';
+		} else if (hasNote && !displayColor) {
+			borderClass = 'border-green-500 border-2';
 		}
 		
-		const colors: Record<AnnotationColor, string> = {
-			yellow: 'bg-yellow-200/50 border-yellow-400',
-			green: 'bg-green-200/50 border-green-400',
-			blue: 'bg-blue-200/50 border-blue-400',
-			pink: 'bg-pink-200/50 border-pink-400'
-		};
-		return colors[color];
+		// Build background class based on highlight color
+		if (displayColor) {
+			const colors: Record<AnnotationColor, string> = {
+				yellow: 'bg-yellow-200/50 border-yellow-400',
+				green: 'bg-green-200/50 border-green-400',
+				blue: 'bg-blue-200/50 border-blue-400',
+				pink: 'bg-pink-200/50 border-pink-400'
+			};
+			// If has chat, combine highlight bg with chat border
+			if (hasChat) {
+				return colors[displayColor].split(' ')[0] + ' border-blue-500 border-2';
+			}
+			return colors[displayColor];
+		}
+		
+		return 'bg-transparent ' + borderClass;
 	}
 </script>
 
@@ -77,7 +94,7 @@
 			<div class="space-y-3">
 				{#each annotations as annotation (annotation.id)}
 					<div
-						class="rounded-lg border {getColorClass(annotation.color, annotation.type)} p-3 transition-all hover:shadow-md cursor-pointer"
+						class="rounded-lg border {getColorClass(annotation)} p-3 transition-all hover:shadow-md cursor-pointer"
 						onclick={() => onNavigate(annotation)}
 						onkeydown={(e) => e.key === 'Enter' && onNavigate(annotation)}
 						role="button"
@@ -88,6 +105,12 @@
 							<div class="mt-2 flex items-start gap-2 border-t border-border/50 pt-2">
 								<MessageSquare class="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
 								<p class="text-sm text-muted-foreground">{annotation.note}</p>
+							</div>
+						{/if}
+						{#if annotation.chatThreadId}
+							<div class="mt-2 flex items-center gap-1 text-xs text-blue-500">
+								<Bot class="h-3 w-3" />
+								<span>Has AI chat</span>
 							</div>
 						{/if}
 						<div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">

@@ -2,11 +2,12 @@
 	import { onMount } from 'svelte';
 	import { MessageSquare, Trash2, X, Bot } from '@lucide/svelte';
 	import type { Annotation, AnnotationColor } from '$lib/types';
+	import { getAnnotationDisplayColor, annotationHasHighlight, annotationHasChat } from '$lib/types';
 
 	interface Props {
 		annotation: Annotation;
 		position: { x: number; y: number };
-		onUpdateColor: (color: AnnotationColor) => void;
+		onUpdateColor: (color: AnnotationColor | null) => void;
 		onUpdateNote: (note: string | undefined) => void;
 		onDelete: () => void;
 		onClose: () => void;
@@ -14,6 +15,11 @@
 	}
 
 	let { annotation, position, onUpdateColor, onUpdateNote, onDelete, onClose, onOpenAIChat }: Props = $props();
+	
+	// Derived state from composable properties
+	const currentHighlightColor = $derived(getAnnotationDisplayColor(annotation));
+	const hasHighlight = $derived(annotationHasHighlight(annotation));
+	const hasChat = $derived(annotationHasChat(annotation));
 
 	let showNoteInput = $state(false);
 	let noteText = $state('');
@@ -76,7 +82,14 @@
 	});
 
 	function handleColorClick(color: AnnotationColor) {
-		if (color !== annotation.color) {
+		if (color === currentHighlightColor) {
+			// Clicking same color - toggle off (but only delete if no other content)
+			if (!annotation.note && !annotation.chatThreadId) {
+				onDelete();
+			} else {
+				onUpdateColor(null);  // Remove highlight but keep annotation
+			}
+		} else {
 			onUpdateColor(color);
 		}
 	}
@@ -122,12 +135,12 @@
 >
 	<!-- Main toolbar -->
 	<div class="flex items-center gap-1 p-2">
-		<!-- Highlight colors with X on selected to toggle off (only for highlight type, not note-only) -->
+		<!-- Highlight colors with X on selected to toggle off -->
 		<div class="flex items-center gap-1 border-r border-border pr-2">
 			{#each colors as { color, bg, ring }}
-				{@const isSelected = annotation.color === color && annotation.type === 'highlight'}
+				{@const isSelected = currentHighlightColor === color}
 				<button
-					onclick={() => isSelected ? onDelete() : handleColorClick(color)}
+					onclick={() => handleColorClick(color)}
 					class="relative h-6 w-6 rounded-full transition-transform hover:scale-110 {bg} {isSelected ? `ring-2 ${ring}` : ''}"
 					aria-label={isSelected ? "Remove highlight" : `Highlight ${color}`}
 					title={isSelected ? "Remove highlight" : `Highlight ${color}`}

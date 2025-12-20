@@ -1,7 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { MessageSquare, Trash2, X, Bot } from '@lucide/svelte';
-	import type { Annotation, AnnotationColor, AnnotationType } from '$lib/types';
+	import type { Annotation, AnnotationColor } from '$lib/types';
+	import { annotationHasHighlight, getAnnotationDisplayColor } from '$lib/types';
+
+	// Composable annotation data - allows highlight + note + chat simultaneously
+	export interface AnnotationSaveData {
+		highlightColor?: AnnotationColor | null;  // null = explicitly no highlight
+		note?: string;
+		chatThreadId?: string;
+	}
 
 	interface Props {
 		// For new selections
@@ -11,10 +19,10 @@
 		annotation?: Annotation;
 		// Common
 		position: { x: number; y: number };
-		onSave: (data: { color: AnnotationColor; note?: string; type: AnnotationType }) => void;
+		onSave: (data: AnnotationSaveData) => void;
 		onDelete?: () => void;
 		onClose: () => void;
-		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string }) => void;
+		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string; annotationId?: string }) => void;
 	}
 
 	let { 
@@ -32,17 +40,29 @@
 	let showNoteInput = $state(false);
 	let noteText = $state('');
 	let selectedColor = $state<AnnotationColor>('yellow');
+	// Track if user explicitly selected a highlight color (for new annotations)
+	let userSelectedHighlight = $state(false);
 
 	// Determine if we're editing an existing annotation
 	const isEditing = $derived(!!annotation);
 	const displayText = $derived(annotation?.text || selectedText || '');
 	const hasNote = $derived(isEditing && !!annotation?.note);
+	const hasHighlight = $derived(isEditing && annotation ? annotationHasHighlight(annotation) : false);
+	const hasChat = $derived(isEditing && !!annotation?.chatThreadId);
+	
+	// Get the current highlight color (using composable model)
+	const currentHighlightColor = $derived(
+		annotation ? getAnnotationDisplayColor(annotation) : null
+	);
 
 	// Initialize state from annotation when editing
 	$effect(() => {
 		if (annotation) {
 			noteText = annotation.note || '';
-			selectedColor = annotation.color;
+			// Use highlightColor if set
+			if (annotation.highlightColor) {
+				selectedColor = annotation.highlightColor;
+			}
 		}
 	});
 
@@ -97,20 +117,37 @@
 	});
 
 	function handleColorClick(color: AnnotationColor) {
-		if (isEditing) {
-			// When editing, clicking a different color updates immediately
-			if (color !== annotation?.color) {
+		if (isEditing && annotation) {
+			const currentColor = currentHighlightColor;
+			if (color !== currentColor) {
+				// Clicking a different color - add/change highlight while preserving other properties
 				selectedColor = color;
-				onSave({ color, note: annotation?.note, type: 'highlight' });
-			} else if (annotation?.type === 'highlight') {
-				// Clicking the same color on a highlight removes it
-				onDelete?.();
+				userSelectedHighlight = true;
+				onSave({ 
+					highlightColor: color,
+					note: annotation.note, 
+					chatThreadId: annotation.chatThreadId
+				});
+			} else {
+				// Clicking the same color - toggle highlight off (but keep note/chat if present)
+				if (annotation.note || annotation.chatThreadId) {
+					// Has other properties - just remove highlight
+					onSave({ 
+						highlightColor: null,
+						note: annotation.note, 
+						chatThreadId: annotation.chatThreadId
+					});
+				} else {
+					// Only has highlight - delete entire annotation
+					onDelete?.();
+				}
 			}
 		} else {
-			// For new selections, clicking a color creates the highlight immediately
+			// For new selections, clicking a color marks that user explicitly chose a highlight
 			selectedColor = color;
+			userSelectedHighlight = true;
 			if (!showNoteInput) {
-				onSave({ color, type: 'highlight' });
+				onSave({ highlightColor: color });
 			}
 		}
 	}
@@ -123,8 +160,19 @@
 	}
 
 	function handleSaveNote() {
-		const type: AnnotationType = noteText.trim() ? 'note' : 'highlight';
-		onSave({ color: selectedColor, note: noteText.trim() || undefined, type });
+		const note = noteText.trim() || undefined;
+		
+		// For new annotations, only include highlight if user explicitly selected a color
+		// For existing annotations, preserve their highlight state
+		const highlightColor = isEditing 
+			? (annotation?.highlightColor ?? null)
+			: (userSelectedHighlight ? selectedColor : null);
+		
+		onSave({ 
+			highlightColor,
+			note,
+			chatThreadId: annotation?.chatThreadId
+		});
 		if (!isEditing) {
 			onClose();
 		}
@@ -133,7 +181,13 @@
 
 	function handleDeleteNote() {
 		noteText = '';
-		onSave({ color: selectedColor, note: undefined, type: 'highlight' });
+		
+		// Remove note but preserve highlight and chat
+		onSave({ 
+			highlightColor: annotation?.highlightColor ?? null,
+			note: undefined, 
+			chatThreadId: annotation?.chatThreadId
+		});
 		showNoteInput = false;
 	}
 
@@ -149,19 +203,24 @@
 			}
 		}
 	}
-
+	
 	function handleAIChat() {
 		// Capture context before any state changes
 		const text = annotation?.text || selectedText || '';
 		const range = annotation?.cfiRange || cfiRange || '';
 		const note = annotation?.note || noteText.trim() || undefined;
 		const existingThreadId = annotation?.chatThreadId;
+		const annotationId = annotation?.id;
 		
 		if (!isEditing) {
-			// For new selections, save as ai-chat type (blue underline)
-			onSave({ color: selectedColor, note: noteText.trim() || undefined, type: 'ai-chat' });
+			// For new selections, create annotation for chat context
+			// Only include highlight if user explicitly clicked a color button first
+			onSave({ 
+				highlightColor: userSelectedHighlight ? selectedColor : null,
+				note: noteText.trim() || undefined
+			});
 		}
-		onOpenAIChat?.({ text, cfiRange: range, note, threadId: existingThreadId });
+		onOpenAIChat?.({ text, cfiRange: range, note, threadId: existingThreadId, annotationId });
 	}
 </script>
 
@@ -177,8 +236,8 @@
 		<!-- Highlight colors -->
 		<div class="flex items-center gap-1 border-r border-border pr-2">
 			{#each colors as { color, bg, ring }}
-				{@const isSelected = selectedColor === color && (isEditing ? annotation?.type === 'highlight' : showNoteInput)}
-				{@const isCurrentColor = isEditing && annotation?.color === color && annotation?.type === 'highlight'}
+				{@const isSelected = selectedColor === color && (isEditing ? hasHighlight : showNoteInput)}
+				{@const isCurrentColor = isEditing && currentHighlightColor === color}
 				<button
 					onclick={() => handleColorClick(color)}
 					class="relative h-6 w-6 rounded-full transition-transform hover:scale-110 {bg} {isSelected || isCurrentColor ? `ring-2 ${ring}` : ''}"
@@ -202,12 +261,12 @@
 			<MessageSquare class="h-4 w-4" />
 		</button>
 
-		<!-- AI Chat button (always enabled) -->
+		<!-- AI Chat button - highlighted if annotation has chat thread -->
 		<button
 			onclick={handleAIChat}
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md text-blue-500 transition-colors hover:bg-blue-500/10"
-			aria-label="AI Chat"
-			title="AI Chat with this context"
+			class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 {hasChat ? 'bg-blue-500/10 text-blue-600' : 'text-blue-500'}"
+			aria-label={hasChat ? 'Continue AI Chat' : 'AI Chat'}
+			title={hasChat ? 'Continue AI Chat' : 'AI Chat with this context'}
 		>
 			<Bot class="h-4 w-4" />
 		</button>

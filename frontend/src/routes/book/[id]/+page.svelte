@@ -6,7 +6,7 @@
 	import { books } from '$lib/stores/books';
 	import { getEpubData } from '$lib/services/storageService';
 	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
-	import type { TocItem, LocationInfo, AnnotationColor, AnnotationType, Annotation } from '$lib/types';
+	import type { TocItem, LocationInfo, AnnotationColor, Annotation } from '$lib/types';
 	import { AppError, ERROR_MESSAGES } from '$lib/types';
 	import { Loader2 } from '@lucide/svelte';
 	import {
@@ -22,6 +22,7 @@
 	import type { PassageContext } from '$lib/types/chat';
 	import { cyphertap } from 'cyphertap';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
+	import { getThreads } from '$lib/services/langgraph';
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
@@ -56,6 +57,9 @@
 	// AI Chat state - passage context for the chat
 	let chatPassageContext = $state<PassageContext | null>(null);
 	let chatInitialThreadId = $state<string | null>(null);
+	// Track which annotation we're chatting about (to save threadId back to it)
+	let chatAnnotationId = $state<string | null>(null);
+	let chatCfiRange = $state<string | null>(null);
 
 	// Wallet store for payment integration
 	const wallet = useWalletStore();
@@ -100,6 +104,57 @@
 		isLoading = false;
 	}
 
+	/**
+	 * Reconcile annotations with existing threads.
+	 * Removes orphaned annotations whose threads no longer exist.
+	 * 
+	 * With composable model, an annotation is valid if it has ANY of:
+	 * - highlightColor (visible highlight)
+	 * - note (user note)
+	 * - valid chatThreadId (AI chat thread)
+	 * 
+	 * If chatThreadId is orphaned, we clear it but keep the annotation
+	 * if it has other properties (highlight or note).
+	 */
+	async function reconcileAnnotations(): Promise<void> {
+		if (!book) return;
+		
+		try {
+			// Fetch all existing threads from server
+			const existingThreads = await getThreads();
+			const existingThreadIds = new Set(existingThreads.map(t => t.thread_id));
+			
+			for (const annotation of book.annotations) {
+				// Check if annotation has an orphaned chatThreadId
+				const hasOrphanedThread = annotation.chatThreadId && !existingThreadIds.has(annotation.chatThreadId);
+				
+				if (!hasOrphanedThread) continue;
+				
+				console.log(`[Reconcile] Orphaned thread: ${annotation.id} -> thread ${annotation.chatThreadId}`);
+				
+				// Check what other properties the annotation has
+				const hasHighlight = !!annotation.highlightColor;
+				const hasNote = !!annotation.note;
+				
+				if (hasHighlight || hasNote) {
+					// Has other properties - just clear the chatThreadId
+					console.log(`[Reconcile] Clearing orphaned threadId: ${annotation.id}`);
+					books.updateAnnotation(book.id, annotation.id, { 
+						chatThreadId: undefined
+					});
+					epubService.updateHighlight({ ...annotation, chatThreadId: undefined });
+				} else {
+					// Only had chat - remove entirely
+					console.log(`[Reconcile] Removing orphaned annotation: ${annotation.id}`);
+					epubService.removeHighlight(annotation.cfiRange);
+					books.removeAnnotation(book.id, annotation.id);
+				}
+			}
+		} catch (e) {
+			console.warn('[Reconcile] Failed to reconcile annotations:', e);
+		}
+	}
+
 	onMount(async () => {
 		setReadingMode(true);
 
@@ -120,6 +175,21 @@
 			}
 
 			await epubService.loadBook(epubData);
+			
+			// Wait for container to have proper dimensions before rendering
+			// This prevents the flash of incorrectly sized content
+			await new Promise<void>((resolve) => {
+				const checkDimensions = () => {
+					const rect = readerContainer.getBoundingClientRect();
+					if (rect.width > 0 && rect.height > 0) {
+						resolve();
+					} else {
+						requestAnimationFrame(checkDimensions);
+					}
+				};
+				checkDimensions();
+			});
+			
 			await epubService.renderBook(readerContainer, {
 				startCfi: book.currentCfi,
 				bookId: book.id
@@ -135,6 +205,9 @@
 			if (book.annotations.length > 0) {
 				epubService.loadAnnotations(book.annotations);
 			}
+
+			// Reconcile annotations with threads (clean up orphaned ai-chat annotations)
+			reconcileAnnotations();
 
 			// Load table of contents and chapter positions
 			toc = await epubService.getTableOfContents();
@@ -258,8 +331,20 @@
 	function toggleOverlay(overlay: 'toc' | 'annotations' | 'ai-chat' | 'settings'): void {
 		showTOC = overlay === 'toc' ? !showTOC : false;
 		showAnnotations = overlay === 'annotations' ? !showAnnotations : false;
-		showAIChat = overlay === 'ai-chat' ? !showAIChat : false;
 		showSettings = overlay === 'settings' ? !showSettings : false;
+		
+		// For AI chat, clear context when toggling from header (not from annotation)
+		if (overlay === 'ai-chat') {
+			const wasOpen = showAIChat;
+			showAIChat = !wasOpen;
+			if (!wasOpen) {
+				// Opening chat from header - clear any previous context
+				chatPassageContext = null;
+				chatInitialThreadId = null;
+			}
+		} else {
+			showAIChat = false;
+		}
 	}
 
 	function deleteAnnotation(annotationId: string): void {
@@ -277,25 +362,37 @@
 		showAnnotations = false;
 	}
 
+	// Composable annotation save data type (no legacy fields)
+	interface AnnotationSaveData {
+		highlightColor?: AnnotationColor | null;
+		note?: string;
+		chatThreadId?: string;
+	}
+
 	// Unified handler for saving annotations (both new and editing)
-	function handleAnnotationSave(data: { color: AnnotationColor; note?: string; type: AnnotationType }): void {
+	function handleAnnotationSave(data: AnnotationSaveData): void {
 		if (!book || !currentLocation) return;
 
 		if (editingAnnotation) {
-			// Editing existing annotation
-			const updatedAnnotation = { ...editingAnnotation.annotation, ...data };
-			books.updateAnnotation(book.id, editingAnnotation.annotation.id, data);
+			// Editing existing annotation - merge composable properties
+			const updateData: Partial<Annotation> = {
+				highlightColor: data.highlightColor,
+				note: data.note,
+				chatThreadId: data.chatThreadId ?? editingAnnotation.annotation.chatThreadId,
+			};
+			const updatedAnnotation = { ...editingAnnotation.annotation, ...updateData };
+			books.updateAnnotation(book.id, editingAnnotation.annotation.id, updateData);
 			epubService.updateHighlight(updatedAnnotation);
 			editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
 		} else if (textSelection) {
-			// Creating new annotation
+			// Creating new annotation with composable properties
 			const newAnnotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'> = {
 				cfiRange: textSelection.cfiRange,
 				text: textSelection.text,
 				note: data.note,
 				page: currentLocation.page,
-				color: data.color,
-				type: data.type
+				highlightColor: data.highlightColor,
+				chatThreadId: data.chatThreadId,
 			};
 
 			books.addAnnotation(book.id, newAnnotation);
@@ -335,24 +432,26 @@
 		const linkedAnnotations = book.annotations.filter(a => a.chatThreadId === threadId);
 		
 		for (const annotation of linkedAnnotations) {
-			// If annotation only has chat (no highlight color and no note), remove it entirely
-			if (annotation.type === 'ai-chat' && !annotation.note) {
+			// Check if annotation has other properties (highlight or note)
+			const hasHighlight = !!annotation.highlightColor;
+			const hasNote = !!annotation.note;
+			
+			if (!hasHighlight && !hasNote) {
+				// Only had chat - remove entire annotation
 				epubService.removeHighlight(annotation.cfiRange);
 				books.removeAnnotation(book.id, annotation.id);
 			} else {
-				// Otherwise, just clear the chatThreadId and change type back to note/highlight
-				const newType = annotation.note ? 'note' : 'highlight';
+				// Has other properties - just clear the chatThreadId
 				books.updateAnnotation(book.id, annotation.id, { 
-					chatThreadId: undefined,
-					type: newType 
+					chatThreadId: undefined
 				});
 				// Update the visual highlight
-				epubService.updateHighlight({ ...annotation, type: newType, chatThreadId: undefined });
+				epubService.updateHighlight({ ...annotation, chatThreadId: undefined });
 			}
 		}
 	}
 
-	function handleOpenAIChat(context: { text: string; cfiRange: string; note?: string; threadId?: string }): void {
+	function handleOpenAIChat(context: { text: string; cfiRange: string; note?: string; threadId?: string; annotationId?: string }): void {
 		// Set passage context for the new chat interface
 		chatPassageContext = {
 			text: context.text,
@@ -360,6 +459,10 @@
 			bookTitle: book?.title,
 			chapter: currentLocation?.chapter
 		};
+		
+		// Track which annotation we're chatting about
+		chatAnnotationId = context.annotationId || null;
+		chatCfiRange = context.cfiRange;
 		
 		// If opening from an existing annotation with a thread, restore that thread
 		chatInitialThreadId = context.threadId || null;
@@ -405,19 +508,18 @@
 
 		<!-- Main Reading Area -->
 		<div class="relative flex flex-1 overflow-hidden">
+			<div
+				bind:this={readerContainer}
+				class="epub-container flex-1 {isLoading ? 'loading' : 'ready'}"
+			></div>
 			{#if isLoading}
-				<div class="flex flex-1 items-center justify-center bg-background">
+				<div class="absolute inset-0 flex items-center justify-center bg-background z-10">
 					<div class="flex flex-col items-center gap-3 text-muted-foreground">
 						<Loader2 class="h-8 w-8 animate-spin" />
 						<p>Loading book...</p>
 					</div>
 				</div>
 			{/if}
-			<div
-				bind:this={readerContainer}
-				class="epub-container flex-1"
-				style:visibility={isLoading ? 'hidden' : 'visible'}
-			></div>
 
 			{#if !isLoading}
 				<ReaderControls onPrevPage={handlePrevPage} onNextPage={handleNextPage} />
@@ -468,20 +570,29 @@
 		{#if showAIChat}
 			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: var(--card); color: var(--card-foreground);">
 				<ChatThread
-					onClose={() => { showAIChat = false; chatPassageContext = null; chatInitialThreadId = null; }}
+					onClose={() => { 
+						showAIChat = false; 
+						chatPassageContext = null; 
+						chatInitialThreadId = null; 
+						chatAnnotationId = null;
+						chatCfiRange = null;
+					}}
 					passageContext={chatPassageContext || undefined}
 					showHistory={true}
 					initialThreadId={chatInitialThreadId || undefined}
 					{generatePayment}
 					onThreadChange={(threadId) => {
-						// Update the annotation with the new thread ID if we have an editing annotation
-						if (editingAnnotation && threadId) {
-							const updatedAnnotation = { ...editingAnnotation.annotation, chatThreadId: threadId };
-							handleAnnotationSave({ 
-								color: updatedAnnotation.color, 
-								note: updatedAnnotation.note, 
-								type: 'ai-chat' 
-							});
+						// Update the annotation with the new thread ID (preserve other properties)
+						if (book && threadId && chatCfiRange) {
+							const existingAnnotation = book.annotations.find(a => a.cfiRange === chatCfiRange);
+							if (existingAnnotation) {
+								// Only update chatThreadId - preserve highlightColor, note, etc.
+								books.updateAnnotation(book.id, existingAnnotation.id, { 
+									chatThreadId: threadId
+								});
+								epubService.updateHighlight({ ...existingAnnotation, chatThreadId: threadId });
+							}
+							chatAnnotationId = existingAnnotation?.id || null;
 						}
 						console.log('Thread changed:', threadId);
 					}}

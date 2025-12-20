@@ -13,21 +13,37 @@ export interface Book {
 	currentCfi?: string;
 }
 
-export type AnnotationType = 'highlight' | 'note' | 'ai-chat';
-
+// Annotation interface using composable properties
+// An annotation can have any combination of: highlight, note, chat
 export interface Annotation {
 	id: string;
 	bookId: string;
 	cfiRange: string;
 	text: string;
-	note?: string;
 	chapter?: string;
 	page: number;
-	color: AnnotationColor;
-	type: AnnotationType;
 	createdAt: Date;
-	chatThreadId?: string; // LangGraph thread ID for AI chat persistence
+	
+	// Composable properties - an annotation can have any combination of these
+	highlightColor?: AnnotationColor | null;  // null = explicitly no highlight, undefined = not set
+	note?: string;                             // presence = has user note
+	chatThreadId?: string;                     // presence = has AI chat thread
 }
+
+// Helper functions to check annotation capabilities
+export const annotationHasHighlight = (a: Annotation): boolean => !!a.highlightColor;
+
+export const annotationHasNote = (a: Annotation): boolean => !!a.note;
+
+export const annotationHasChat = (a: Annotation): boolean => !!a.chatThreadId;
+
+// Get the highlight color for display (null if no highlight)
+export const getAnnotationDisplayColor = (a: Annotation): AnnotationColor | null => 
+	a.highlightColor ?? null;
+
+// Check if annotation has any content (used to determine if it should be kept)
+export const annotationHasContent = (a: Annotation): boolean => 
+	annotationHasHighlight(a) || annotationHasNote(a) || annotationHasChat(a);
 
 export type AnnotationColor = 'yellow' | 'green' | 'blue' | 'pink';
 

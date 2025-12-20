@@ -70,7 +70,13 @@ export async function submitMessage(
 	};
 	
 	if (options.context) {
-		input.context = options.context;
+		// Agent expects passage_context with snake_case keys
+		input.passage_context = {
+			text: options.context.text,
+			note: options.context.note,
+			book_title: options.context.bookTitle,
+			chapter: options.context.chapter,
+		};
 	}
 	
 	if (options.payment) {

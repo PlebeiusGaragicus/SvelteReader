@@ -79,14 +79,12 @@
 
 		<div class="flex items-center gap-1">
 			{#if isLoading}
-				<button
-					type="button"
-					onclick={onStop}
-					class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
-					title="Stop generating"
+				<div
+					class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-muted"
+					title="Processing..."
 				>
-					<Square class="h-4 w-4" />
-				</button>
+					<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+				</div>
 			{:else}
 				<button
 					type="submit"

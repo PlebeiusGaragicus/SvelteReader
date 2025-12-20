@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Message } from '@langchain/langgraph-sdk';
-	import { Bot, X, ChevronLeft, SquarePen, AlertCircle } from '@lucide/svelte';
+	import { Bot, X, ChevronLeft, SquarePen, AlertCircle, Trash2 } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
 	import { useChatStore } from '$lib/stores/chat.svelte';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
@@ -12,6 +12,13 @@
 	import HumanMessage from './messages/HumanMessage.svelte';
 	import AssistantMessage from './messages/AssistantMessage.svelte';
 	import ChatHistory from './ChatHistory.svelte';
+
+	// State machine for chat modes - cleaner than tracking multiple booleans
+	type ChatMode = 
+		| { type: 'history' }
+		| { type: 'new-chat'; context?: PassageContext }
+		| { type: 'loading-thread'; threadId: string }
+		| { type: 'thread'; threadId: string };
 
 	type ViewMode = 'chat' | 'history';
 
@@ -31,9 +38,25 @@
 	const wallet = useWalletStore();
 
 	let messagesContainer = $state<HTMLDivElement | null>(null);
-	let currentView = $state<ViewMode>('chat');
 	let hideToolCalls = $state(false);
 	let backendAvailable = $state<boolean | null>(null);
+	
+	// State machine for chat mode
+	let mode = $state<ChatMode>(
+		initialThreadId 
+			? { type: 'loading-thread', threadId: initialThreadId }
+			: passageContext 
+				? { type: 'new-chat', context: passageContext }
+				: { type: 'history' }
+	);
+	
+	// Derive view from mode
+	const currentView = $derived<ViewMode>(
+		mode.type === 'history' ? 'history' : 'chat'
+	);
+	
+	// Track if we're in a loading state for a thread
+	const isLoadingThread = $derived(mode.type === 'loading-thread');
 
 	// Filter messages that should be rendered
 	const visibleMessages = $derived(
@@ -49,11 +72,6 @@
 		// Load threads list
 		chat.loadThreads();
 
-		// Load initial thread if provided
-		if (initialThreadId) {
-			chat.loadThread(initialThreadId);
-		}
-		
 		// Set up refund callback for payment recovery
 		// This allows the chat store to refund tokens via CypherTap on errors
 		chat.setRefundCallback(async (token: string) => {
@@ -72,10 +90,60 @@
 		chat.recoverPendingPayment();
 	});
 
-	// Notify parent when thread changes
+	// Track which thread we've already started loading to prevent duplicate loads
+	let loadingThreadId = $state<string | null>(null);
+	let hasInitializedNewChat = $state(false);
+	
+	// Handle mode transitions - load thread data when entering loading-thread mode
 	$effect(() => {
-		if (onThreadChange && chat.threadId !== undefined) {
-			onThreadChange(chat.threadId);
+		if (mode.type === 'loading-thread') {
+			const threadId = mode.threadId;
+			// Prevent duplicate loads
+			if (loadingThreadId === threadId) return;
+			loadingThreadId = threadId;
+			
+			chat.loadThread(threadId).then(success => {
+				if (success) {
+					mode = { type: 'thread', threadId };
+				} else {
+					// Thread not found - go back to history
+					mode = { type: 'history' };
+				}
+				loadingThreadId = null;
+			});
+		} else if (mode.type === 'new-chat' && !hasInitializedNewChat) {
+			// Ensure clean state for new chat (only once per new-chat mode)
+			hasInitializedNewChat = true;
+			chat.newThread();
+		} else if (mode.type !== 'new-chat') {
+			// Reset flag when leaving new-chat mode
+			hasInitializedNewChat = false;
+		}
+	});
+	
+	// React to prop changes (e.g., when opening from annotation)
+	// Use JSON comparison for passageContext since it's an object
+	let lastInitialThreadId = $state<string | undefined>(initialThreadId);
+	let lastPassageContextJson = $state<string>(JSON.stringify(passageContext));
+	
+	$effect(() => {
+		// Check if initialThreadId changed
+		if (initialThreadId !== lastInitialThreadId) {
+			lastInitialThreadId = initialThreadId;
+			if (initialThreadId) {
+				hasInitializedNewChat = false;  // Reset for potential future new-chat
+				mode = { type: 'loading-thread', threadId: initialThreadId };
+			}
+		}
+		
+		// Check if passageContext changed (and we don't have a thread)
+		const currentContextJson = JSON.stringify(passageContext);
+		if (currentContextJson !== lastPassageContextJson && !initialThreadId) {
+			lastPassageContextJson = currentContextJson;
+			if (passageContext) {
+				hasInitializedNewChat = false;  // Reset to allow newThread() call
+				mode = { type: 'new-chat', context: passageContext };
+			}
 		}
 	});
 
@@ -92,10 +160,15 @@
 	});
 
 	async function handleSubmit(content: string) {
+		const previousThreadId = chat.threadId;
 		await chat.submit(content, {
 			context: passageContext,
 			generatePayment,
 		});
+		// Notify parent if a new thread was created
+		if (chat.threadId && chat.threadId !== previousThreadId) {
+			onThreadChange?.(chat.threadId);
+		}
 	}
 
 	function handleRegenerate() {
@@ -104,14 +177,23 @@
 	}
 
 	function handleNewThread() {
-		chat.newThread();
-		currentView = 'chat';
+		hasInitializedNewChat = false;  // Reset to allow newThread() call
+		mode = { type: 'new-chat', context: passageContext };
 		onThreadChange?.(null);
 	}
 
+	function handleDeleteCurrentThread() {
+		if (chat.threadId) {
+			const threadIdToDelete = chat.threadId;
+			chat.deleteThread(threadIdToDelete);
+			onThreadDelete?.(threadIdToDelete);
+			// Go back to history view after deletion
+			mode = { type: 'history' };
+		}
+	}
+
 	function handleSelectThread(threadId: string) {
-		chat.loadThread(threadId);
-		currentView = 'chat';
+		mode = { type: 'loading-thread', threadId };
 	}
 
 	function handleDeleteThread(threadId: string) {
@@ -121,11 +203,16 @@
 	}
 
 	function goToHistory() {
-		currentView = 'history';
+		mode = { type: 'history' };
 	}
 
 	function goToChat() {
-		currentView = 'chat';
+		if (chat.threadId) {
+			mode = { type: 'thread', threadId: chat.threadId };
+		} else {
+			hasInitializedNewChat = false;  // Reset to allow newThread() call
+			mode = { type: 'new-chat', context: passageContext };
+		}
 	}
 </script>
 
@@ -161,6 +248,7 @@
 		<div class="flex-1 overflow-hidden">
 			<ChatHistory
 				threads={chat.threads}
+				isLoading={chat.isThreadsLoading}
 				currentThreadId={chat.threadId}
 				onSelectThread={handleSelectThread}
 				onDeleteThread={handleDeleteThread}
@@ -188,6 +276,16 @@
 			</div>
 
 			<div class="flex items-center gap-2">
+				{#if chat.threadId}
+					<button
+						onclick={handleDeleteCurrentThread}
+						class="inline-flex h-8 w-8 items-center justify-center rounded-md text-destructive hover:bg-destructive/10"
+						title="Delete conversation"
+					>
+						<Trash2 class="h-4 w-4" />
+					</button>
+				{/if}
+				
 				<button
 					onclick={handleNewThread}
 					class="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent"
@@ -233,7 +331,18 @@
 				bind:this={messagesContainer}
 				class="flex-1 overflow-y-auto px-4 py-4"
 			>
-				{#if visibleMessages.length === 0}
+				{#if isLoadingThread}
+					<!-- Loading thread skeleton -->
+					<div class="mx-auto flex max-w-3xl flex-col gap-4">
+						<div class="flex justify-end">
+							<div class="h-12 w-48 animate-pulse rounded-2xl bg-muted"></div>
+						</div>
+						<div class="flex justify-start gap-3">
+							<div class="h-8 w-8 animate-pulse rounded-full bg-muted"></div>
+							<div class="h-24 w-64 animate-pulse rounded-2xl bg-muted"></div>
+						</div>
+					</div>
+				{:else if visibleMessages.length === 0}
 					<div class="flex h-full flex-col items-center justify-center text-center">
 						<Bot class="mb-4 h-12 w-12 text-muted-foreground/50" />
 						<p class="text-sm text-muted-foreground">

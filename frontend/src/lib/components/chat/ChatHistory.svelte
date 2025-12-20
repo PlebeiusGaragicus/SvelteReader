@@ -1,21 +1,17 @@
 <script lang="ts">
 	import { MessageSquare, Trash2 } from '@lucide/svelte';
-
-	interface ThreadInfo {
-		thread_id: string;
-		created_at?: string;
-		metadata?: Record<string, unknown>;
-	}
+	import type { ThreadInfo } from '$lib/stores/chat.svelte';
 
 	interface Props {
 		threads: ThreadInfo[];
+		isLoading?: boolean;
 		currentThreadId: string | null;
 		onSelectThread: (threadId: string) => void;
 		onDeleteThread: (threadId: string) => void;
 		onNewThread: () => void;
 	}
 
-	let { threads, currentThreadId, onSelectThread, onDeleteThread, onNewThread }: Props = $props();
+	let { threads, isLoading = false, currentThreadId, onSelectThread, onDeleteThread, onNewThread }: Props = $props();
 
 	function formatDate(dateStr?: string): string {
 		if (!dateStr) return '';
@@ -36,6 +32,11 @@
 	}
 
 	function getThreadTitle(thread: ThreadInfo): string {
+		// Use extracted title from first message if available
+		if (thread.title) {
+			return thread.title;
+		}
+		// Fall back to metadata title
 		if (thread.metadata?.title) {
 			return thread.metadata.title as string;
 		}
@@ -46,7 +47,17 @@
 
 <div class="flex h-full flex-col">
 	<div class="flex-1 overflow-y-auto p-2">
-		{#if threads.length === 0}
+		{#if isLoading}
+			<!-- Loading skeleton -->
+			<div class="flex flex-col gap-1">
+				{#each Array(5) as _, i}
+					<div class="flex flex-col gap-1.5 rounded-lg px-3 py-2">
+						<div class="h-4 w-3/4 animate-pulse rounded bg-muted"></div>
+						<div class="h-3 w-1/3 animate-pulse rounded bg-muted"></div>
+					</div>
+				{/each}
+			</div>
+		{:else if threads.length === 0}
 			<div class="flex flex-col items-center justify-center py-8 text-center">
 				<MessageSquare class="mb-2 h-8 w-8 text-muted-foreground/50" />
 				<p class="text-xs text-muted-foreground">No conversations yet</p>

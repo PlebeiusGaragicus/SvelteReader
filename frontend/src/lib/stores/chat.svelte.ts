@@ -24,14 +24,50 @@ interface PendingPayment {
 	timestamp: number;
 }
 
+// Thread info with extracted title from first message
+export interface ThreadInfo {
+	thread_id: string;
+	created_at?: string;
+	metadata?: Record<string, unknown>;
+	title?: string;  // Extracted from first message content
+}
+
 interface ChatState {
 	messages: Message[];
 	threadId: string | null;
 	isLoading: boolean;
 	isStreaming: boolean;
+	isThreadsLoading: boolean;  // Separate loading state for threads list
 	error: string | null;
-	threads: Array<{ thread_id: string; created_at?: string; metadata?: Record<string, unknown> }>;
+	threads: ThreadInfo[];
 	pendingPayment: PendingPayment | null;
+}
+
+// Extract title from message content (first ~50 chars of first human message)
+function extractThreadTitle(messages: Message[]): string | undefined {
+	const firstHuman = messages.find(m => m.type === 'human');
+	if (!firstHuman) return undefined;
+	
+	let content = '';
+	if (typeof firstHuman.content === 'string') {
+		content = firstHuman.content;
+	} else if (Array.isArray(firstHuman.content)) {
+		// Handle content blocks (text, image_url, etc.)
+		const textBlock = firstHuman.content.find(
+			(block): block is { type: 'text'; text: string } => 
+				typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
+		);
+		content = textBlock?.text || '';
+	}
+	
+	if (!content) return undefined;
+	
+	// Truncate to ~50 chars at word boundary
+	const maxLen = 50;
+	if (content.length <= maxLen) return content;
+	const truncated = content.slice(0, maxLen);
+	const lastSpace = truncated.lastIndexOf(' ');
+	return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
 }
 
 function createChatStore() {
@@ -39,8 +75,9 @@ function createChatStore() {
 	let threadId = $state<string | null>(null);
 	let isLoading = $state(false);
 	let isStreaming = $state(false);
+	let isThreadsLoading = $state(false);
 	let error = $state<string | null>(null);
-	let threads = $state<Array<{ thread_id: string; created_at?: string; metadata?: Record<string, unknown> }>>([]);
+	let threads = $state<ThreadInfo[]>([]);
 	let streamingContent = $state('');
 	let pendingPayment = $state<PendingPayment | null>(null);
 	
@@ -260,33 +297,61 @@ function createChatStore() {
 		return attemptRefund('timeout recovery');
 	}
 
-	async function loadThread(id: string): Promise<void> {
-		if (id === threadId) return;
-
+	async function loadThread(id: string): Promise<boolean> {
+		// Don't set threadId until we confirm it exists
 		isLoading = true;
 		error = null;
 
 		try {
 			const threadMessages = await getThreadMessages(id);
 			messages = threadMessages;
-			threadId = id;
+			threadId = id;  // Only set after successful load
+			return true;
 		} catch (e) {
-			error = `Failed to load thread: ${(e as Error).message}`;
+			// Thread doesn't exist on server - it's orphaned
+			console.warn(`Thread ${id} not found on server:`, e);
+			error = `Thread not found. It may have been deleted.`;
+			messages = [];
+			threadId = null;  // Clear invalid thread
+			return false;
 		} finally {
 			isLoading = false;
 		}
 	}
 
 	async function loadThreads(): Promise<void> {
+		isThreadsLoading = true;
 		try {
 			const threadList = await getThreads();
-			threads = threadList.map(t => ({
-				thread_id: t.thread_id,
-				created_at: t.created_at,
-				metadata: t.metadata,
-			}));
+			
+			// Extract titles from thread values if available
+			threads = threadList.map(t => {
+				let title: string | undefined;
+				
+				// Try to get title from thread values (messages)
+				if (t.values && typeof t.values === 'object' && 'messages' in t.values) {
+					const msgs = (t.values as { messages?: Message[] }).messages;
+					if (msgs && Array.isArray(msgs)) {
+						title = extractThreadTitle(msgs);
+					}
+				}
+				
+				// Fall back to metadata title if available
+				if (!title && t.metadata?.title) {
+					title = String(t.metadata.title);
+				}
+				
+				return {
+					thread_id: t.thread_id,
+					created_at: t.created_at,
+					metadata: t.metadata,
+					title,
+				};
+			});
 		} catch (e) {
 			console.error('Failed to load threads:', e);
+		} finally {
+			isThreadsLoading = false;
 		}
 	}
 
@@ -326,6 +391,7 @@ function createChatStore() {
 		get threadId() { return threadId; },
 		get isLoading() { return isLoading; },
 		get isStreaming() { return isStreaming; },
+		get isThreadsLoading() { return isThreadsLoading; },
 		get error() { return error; },
 		get threads() { return threads; },
 		get streamingContent() { return streamingContent; },
@@ -340,6 +406,7 @@ function createChatStore() {
 		stop,
 		setRefundCallback,
 		recoverPendingPayment,
+		extractThreadTitle,
 		
 		setThreadId: (id: string | null) => { threadId = id; },
 	};

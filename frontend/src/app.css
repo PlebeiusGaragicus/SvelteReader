@@ -119,6 +119,15 @@ html.reading-mode body {
 	border: none !important;
 }
 
+/* Hide epub content until ready - controlled by data attribute */
+.epub-container.loading > div {
+	visibility: hidden !important;
+}
+
+.epub-container.ready > div {
+	visibility: visible !important;
+}
+
 /* Disable text selection on non-book UI elements for desktop-like feel */
 .no-select,
 .reader-page header,

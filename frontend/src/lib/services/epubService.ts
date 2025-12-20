@@ -1,8 +1,8 @@
 import ePub, { Book, Rendition } from 'epubjs';
 import type { NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
-import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationType, AnnotationColor } from '$lib/types';
-import { AppError } from '$lib/types';
+import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationColor } from '$lib/types';
+import { AppError, getAnnotationDisplayColor, annotationHasChat, annotationHasNote } from '$lib/types';
 
 // Re-export types for backward compatibility
 export type { BookMetadata, TocItem, LocationInfo } from '$lib/types';
@@ -151,15 +151,26 @@ class EpubService {
 		// Register touch/swipe and keyboard handlers for content
 		this.setupContentHandlers();
 
-		// Setup resize observer for responsive behavior
-		this.setupResizeObserver(container);
-
-		// Display the book immediately (don't wait for locations)
+		// Wait for the rendition to be fully rendered before displaying
+		const renderPromise = new Promise<void>((resolve) => {
+			this.rendition!.once('rendered', () => resolve());
+		});
+		
+		// Display the book
 		if (options?.startCfi) {
 			await this.rendition.display(options.startCfi);
 		} else {
 			await this.rendition.display();
 		}
+		
+		// Wait for render to complete
+		await renderPromise;
+		
+		// Additional frame to ensure layout is stable
+		await new Promise(resolve => requestAnimationFrame(resolve));
+		
+		// Now setup resize observer for responsive behavior
+		this.setupResizeObserver(container);
 
 		// Load or generate locations in background
 		this.loadLocationsAsync(options?.bookId);
@@ -197,10 +208,10 @@ class EpubService {
 			const iframe = contents.document.defaultView.frameElement;
 			const iframeRect = iframe?.getBoundingClientRect() || { left: 0, top: 0 };
 
-			// Position popup above the selection
+			// Position popup above the selection (use same offset as highlight clicks)
 			const position = {
 				x: iframeRect.left + rect.left + rect.width / 2,
-				y: iframeRect.top + rect.top - 10
+				y: iframeRect.top + rect.top - 40
 			};
 
 			this.selectionCallback({
@@ -540,7 +551,7 @@ class EpubService {
 	addHighlight(annotation: Annotation): void {
 		if (!this.rendition) return;
 
-		const className = this.getHighlightClassName(annotation.type, annotation.color);
+		const className = this.getHighlightClassNameFromAnnotation(annotation);
 		
 		// Track this annotation for style re-injection on page changes
 		if (!this.loadedAnnotations.find(a => a.cfiRange === annotation.cfiRange)) {
@@ -548,7 +559,7 @@ class EpubService {
 		}
 		
 		// Get SVG styles for epub.js highlight (it uses SVG rect elements)
-		const svgStyles = this.getHighlightSvgStyle(annotation.type, annotation.color);
+		const svgStyles = this.getHighlightSvgStyleFromAnnotation(annotation);
 		
 		// Add click handler for this highlight
 		// epub.js passes the DOM event directly to the callback
@@ -630,42 +641,62 @@ class EpubService {
 	private reinjectAllHighlightStyles(): void {
 		// Re-inject all highlight styles for the current annotations
 		this.loadedAnnotations.forEach((annotation) => {
-			this.injectHighlightStyle(annotation.type, annotation.color);
+			this.injectHighlightStyleFromAnnotation(annotation);
 		});
 	}
 
-	private getHighlightClassName(type: AnnotationType, color: AnnotationColor): string {
-		if (type === 'note') {
-			return 'hl-note';
-		} else if (type === 'ai-chat') {
+	// Get class name based on composable annotation properties
+	private getHighlightClassNameFromAnnotation(annotation: Annotation): string {
+		const displayColor = getAnnotationDisplayColor(annotation);
+		const hasChat = annotationHasChat(annotation);
+		const hasNote = annotationHasNote(annotation);
+		
+		// Priority: highlight color > chat > note
+		if (displayColor) {
+			// Has visible highlight - use color class, add chat/note indicator via border
+			if (hasChat) {
+				return `hl-${displayColor}-chat`;
+			}
+			return `hl-${displayColor}`;
+		} else if (hasChat) {
 			return 'hl-ai-chat';
-		} else {
-			return `hl-${color}`;
+		} else if (hasNote) {
+			return 'hl-note';
 		}
+		// Fallback - should not happen with new model
+		return 'hl-yellow';
 	}
 
-	private getHighlightSvgStyle(type: AnnotationType, color: AnnotationColor): object {
-		// epub.js uses SVG rect elements for highlights
-		// These are SVG fill properties, not CSS
+	// Get SVG style based on composable annotation properties
+	private getHighlightSvgStyleFromAnnotation(annotation: Annotation): object {
 		const colorMap: Record<AnnotationColor, string> = {
 			yellow: 'rgba(255, 235, 59, 0.75)',
 			green: 'rgba(76, 175, 80, 0.75)',
 			blue: 'rgba(33, 150, 243, 0.75)',
 			pink: 'rgba(249, 60, 123, 0.75)'
 		};
-
-		if (type === 'note') {
-			// Note: green with dashed underline effect
-			return {
-				'fill': 'rgba(76, 175, 80, 0.2)',
-				'fill-opacity': '0.2',
-				'mix-blend-mode': 'multiply',
-				'stroke': 'rgb(76, 175, 80)',
-				'stroke-width': '2',
-				'stroke-dasharray': '4,2'
+		
+		const displayColor = getAnnotationDisplayColor(annotation);
+		const hasChat = annotationHasChat(annotation);
+		const hasNote = annotationHasNote(annotation);
+		
+		// Has visible highlight color
+		if (displayColor) {
+			const baseStyle: Record<string, string> = {
+				'fill': colorMap[displayColor],
+				'fill-opacity': '0.4',
+				'mix-blend-mode': 'multiply'
 			};
-		} else if (type === 'ai-chat') {
-			// AI chat: blue with dashed underline effect
+			// Add blue border if also has chat
+			if (hasChat) {
+				baseStyle['stroke'] = 'rgb(33, 150, 243)';
+				baseStyle['stroke-width'] = '2';
+			}
+			return baseStyle;
+		}
+		
+		// No highlight color - show as underline based on chat/note
+		if (hasChat) {
 			return {
 				'fill': 'rgba(33, 150, 243, 0.2)',
 				'fill-opacity': '0.2',
@@ -674,24 +705,36 @@ class EpubService {
 				'stroke-width': '2',
 				'stroke-dasharray': '4,2'
 			};
-		} else {
-			// Regular highlight: colored fill
+		}
+		
+		if (hasNote) {
 			return {
-				'fill': colorMap[color],
-				'fill-opacity': '0.4',
-				'mix-blend-mode': 'multiply'
+				'fill': 'rgba(76, 175, 80, 0.2)',
+				'fill-opacity': '0.2',
+				'mix-blend-mode': 'multiply',
+				'stroke': 'rgb(76, 175, 80)',
+				'stroke-width': '2',
+				'stroke-dasharray': '4,2'
 			};
 		}
+		
+		// Fallback - should not happen with new model
+		return {
+			'fill': 'rgba(255, 235, 59, 0.75)',
+			'fill-opacity': '0.4',
+			'mix-blend-mode': 'multiply'
+		};
 	}
 
-	private injectHighlightStyle(type: AnnotationType, color: AnnotationColor): void {
+	// Inject highlight style based on composable annotation properties
+	private injectHighlightStyleFromAnnotation(annotation: Annotation): void {
 		const contents = this.rendition?.getContents() as any;
 		if (!contents || !contents[0]) return;
 
 		const doc = contents[0].document;
 		if (!doc) return;
 
-		const className = this.getHighlightClassName(type, color);
+		const className = this.getHighlightClassNameFromAnnotation(annotation);
 		const styleId = `highlight-style-${className}`;
 
 		// Don't inject if already exists
@@ -704,13 +747,25 @@ class EpubService {
 			pink: 'rgba(233, 30, 99, 0.5)'
 		};
 
+		const displayColor = getAnnotationDisplayColor(annotation);
+		const hasChat = annotationHasChat(annotation);
+		const hasNote = annotationHasNote(annotation);
+
 		let css = '';
-		if (type === 'note') {
-			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(76, 175, 80) !important; border-radius: 0 !important; }`;
-		} else if (type === 'ai-chat') {
+		if (displayColor) {
+			if (hasChat) {
+				// Highlight with chat indicator border
+				css = `.${className} { background-color: ${colorMap[displayColor]} !important; border-bottom: 2px solid rgb(33, 150, 243) !important; border-radius: 2px !important; }`;
+			} else {
+				css = `.${className} { background-color: ${colorMap[displayColor]} !important; border-radius: 2px !important; }`;
+			}
+		} else if (hasChat) {
 			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(33, 150, 243) !important; border-radius: 0 !important; }`;
+		} else if (hasNote) {
+			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(76, 175, 80) !important; border-radius: 0 !important; }`;
 		} else {
-			css = `.${className} { background-color: ${colorMap[color]} !important; border-radius: 2px !important; }`;
+			// Fallback - should not happen with new model
+			css = `.${className} { background-color: rgba(255, 235, 59, 0.5) !important; border-radius: 2px !important; }`;
 		}
 
 		const style = doc.createElement('style');
