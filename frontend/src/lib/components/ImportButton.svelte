@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Upload, Loader2 } from '@lucide/svelte';
 	import { books } from '$lib/stores/books';
-	import { storeEpubData } from '$lib/services/storageService';
+	import { storeEpubData, computeSha256, getBookBySha256 } from '$lib/services/storageService';
 	import { epubService } from '$lib/services/epubService';
 	import { AppError } from '$lib/types';
 	import { toast } from 'svelte-sonner';
@@ -29,17 +29,41 @@
 		try {
 			const parsed = await epubService.parseEpub(file);
 
-			// Extract cover as data URL for persistent storage
-			const coverDataUrl = await epubService.extractCoverAsDataUrl(parsed.book);
+			// Compute SHA-256 hash of the EPUB file
+			const sha256 = await computeSha256(parsed.arrayBuffer);
 
-			// Add book to store
-			const bookId = books.addBook({
+			// Check if book already exists (by content hash)
+			const existingBook = await getBookBySha256(sha256);
+			if (existingBook) {
+				if (existingBook.hasEpubData) {
+					toast.info(`"${existingBook.title}" is already in your library`);
+					return;
+				} else {
+					// Ghost book exists - add EPUB data to it
+					await storeEpubData(existingBook.id, parsed.arrayBuffer);
+					await books.update(existingBook.id, { hasEpubData: true });
+					toast.success(`Added EPUB data to "${existingBook.title}"`);
+					return;
+				}
+			}
+
+			// Extract cover as base64 for persistent storage
+			const coverDataUrl = await epubService.extractCoverAsDataUrl(parsed.book);
+			// Convert data URL to base64 (remove prefix)
+			const coverBase64 = coverDataUrl?.replace(/^data:image\/[^;]+;base64,/, '');
+
+			// Add book to store with new structure
+			const bookId = await books.add({
+				// BookIdentity (publishable)
+				sha256,
 				title: parsed.metadata.title,
 				author: parsed.metadata.author,
-				coverUrl: coverDataUrl,
-				totalPages: parsed.metadata.totalPages,
+				coverBase64,
+				// BookLocal (not published)
+				progress: 0,
 				currentPage: 0,
-				progress: 0
+				totalPages: parsed.metadata.totalPages,
+				hasEpubData: true
 			});
 
 			// Store EPUB data for later reading

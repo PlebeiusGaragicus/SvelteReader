@@ -8,28 +8,40 @@ vi.mock('$app/environment', () => ({
 
 // Mock storage service
 vi.mock('$lib/services/storageService', () => ({
-	removeEpubData: vi.fn()
+	removeEpubData: vi.fn(),
+	storeBook: vi.fn(),
+	getBook: vi.fn(),
+	getAllBooks: vi.fn().mockResolvedValue([]),
+	deleteBook: vi.fn(),
+	getAnnotationsByBook: vi.fn().mockResolvedValue([]),
+	deleteAnnotationsByBook: vi.fn(),
+	storeAnnotation: vi.fn(),
+	getAnnotation: vi.fn(),
+	getAllAnnotations: vi.fn().mockResolvedValue([]),
+	deleteAnnotation: vi.fn()
 }));
 
 // Import after mocks are set up
 const { books } = await import('./books');
+const { annotations } = await import('./annotations');
 
 describe('books store', () => {
 	beforeEach(() => {
-		// Reset store and localStorage before each test
+		// Reset stores before each test
 		books.reset();
-		vi.mocked(localStorage.getItem).mockReturnValue(null);
-		vi.mocked(localStorage.setItem).mockClear();
+		annotations.reset();
 	});
 
-	describe('addBook', () => {
-		it('adds a book with generated id and empty annotations', () => {
-			const bookId = books.addBook({
+	describe('add', () => {
+		it('adds a book with generated id', async () => {
+			const bookId = await books.add({
+				sha256: 'abc123',
 				title: 'Test Book',
 				author: 'Test Author',
 				progress: 0,
 				totalPages: 100,
-				currentPage: 0
+				currentPage: 0,
+				hasEpubData: true
 			});
 
 			expect(bookId).toBeDefined();
@@ -39,118 +51,62 @@ describe('books store', () => {
 			expect(allBooks).toHaveLength(1);
 			expect(allBooks[0].title).toBe('Test Book');
 			expect(allBooks[0].author).toBe('Test Author');
-			expect(allBooks[0].annotations).toEqual([]);
-		});
-
-		it('saves to localStorage after adding', () => {
-			books.addBook({
-				title: 'Test Book',
-				author: 'Test Author',
-				progress: 0,
-				totalPages: 100,
-				currentPage: 0
-			});
-
-			expect(localStorage.setItem).toHaveBeenCalled();
+			expect(allBooks[0].sha256).toBe('abc123');
+			expect(allBooks[0].hasEpubData).toBe(true);
 		});
 	});
 
-	describe('removeBook', () => {
-		it('removes a book by id', () => {
-			const bookId = books.addBook({
+	describe('remove', () => {
+		it('removes a book by id', async () => {
+			const bookId = await books.add({
+				sha256: 'abc123',
 				title: 'Test Book',
 				author: 'Test Author',
 				progress: 0,
 				totalPages: 100,
-				currentPage: 0
+				currentPage: 0,
+				hasEpubData: true
 			});
 
 			expect(get(books)).toHaveLength(1);
 
-			books.removeBook(bookId);
+			await books.remove(bookId);
 
 			expect(get(books)).toHaveLength(0);
 		});
 	});
 
 	describe('updateProgress', () => {
-		it('updates book progress and lastRead date', () => {
-			const bookId = books.addBook({
+		it('updates book progress', async () => {
+			const bookId = await books.add({
+				sha256: 'abc123',
 				title: 'Test Book',
 				author: 'Test Author',
 				progress: 0,
 				totalPages: 100,
-				currentPage: 0
+				currentPage: 0,
+				hasEpubData: true
 			});
 
-			books.updateProgress(bookId, 50, 'epubcfi(/test)');
+			await books.updateProgress(bookId, 50, 'epubcfi(/test)');
 
 			const allBooks = get(books);
 			expect(allBooks[0].currentPage).toBe(50);
 			expect(allBooks[0].progress).toBe(50);
 			expect(allBooks[0].currentCfi).toBe('epubcfi(/test)');
-			expect(allBooks[0].lastRead).toBeInstanceOf(Date);
-		});
-	});
-
-	describe('addAnnotation', () => {
-		it('adds an annotation to a book', () => {
-			const bookId = books.addBook({
-				title: 'Test Book',
-				author: 'Test Author',
-				progress: 0,
-				totalPages: 100,
-				currentPage: 0
-			});
-
-			books.addAnnotation(bookId, {
-				cfiRange: 'epubcfi(/test/range)',
-				text: 'Highlighted text',
-				page: 10,
-				highlightColor: 'yellow'
-			});
-
-			const allBooks = get(books);
-			expect(allBooks[0].annotations).toHaveLength(1);
-			expect(allBooks[0].annotations[0].text).toBe('Highlighted text');
-			expect(allBooks[0].annotations[0].highlightColor).toBe('yellow');
-			expect(allBooks[0].annotations[0].cfiRange).toBe('epubcfi(/test/range)');
-			expect(allBooks[0].annotations[0].createdAt).toBeInstanceOf(Date);
-		});
-	});
-
-	describe('removeAnnotation', () => {
-		it('removes an annotation from a book', () => {
-			const bookId = books.addBook({
-				title: 'Test Book',
-				author: 'Test Author',
-				progress: 0,
-				totalPages: 100,
-				currentPage: 0
-			});
-
-			books.addAnnotation(bookId, {
-				cfiRange: 'epubcfi(/test/range)',
-				text: 'Highlighted text',
-				page: 10,
-				highlightColor: 'yellow'
-			});
-
-			const annotationId = get(books)[0].annotations[0].id;
-			books.removeAnnotation(bookId, annotationId);
-
-			expect(get(books)[0].annotations).toHaveLength(0);
 		});
 	});
 
 	describe('reset', () => {
-		it('clears all books', () => {
-			books.addBook({
+		it('clears all books', async () => {
+			await books.add({
+				sha256: 'abc123',
 				title: 'Test Book',
 				author: 'Test Author',
 				progress: 0,
 				totalPages: 100,
-				currentPage: 0
+				currentPage: 0,
+				hasEpubData: true
 			});
 
 			expect(get(books)).toHaveLength(1);
@@ -158,6 +114,115 @@ describe('books store', () => {
 			books.reset();
 
 			expect(get(books)).toHaveLength(0);
+		});
+	});
+});
+
+describe('annotations store', () => {
+	beforeEach(() => {
+		annotations.reset();
+	});
+
+	describe('upsert', () => {
+		it('adds a new annotation', async () => {
+			const annotation = await annotations.upsert(
+				'book-sha256',
+				'epubcfi(/test/range)',
+				{
+					text: 'Highlighted text',
+					highlightColor: 'yellow'
+				}
+			);
+
+			expect(annotation.bookSha256).toBe('book-sha256');
+			expect(annotation.cfiRange).toBe('epubcfi(/test/range)');
+			expect(annotation.text).toBe('Highlighted text');
+			expect(annotation.highlightColor).toBe('yellow');
+			expect(annotation.createdAt).toBeDefined();
+
+			const allAnnotations = get(annotations);
+			expect(allAnnotations).toHaveLength(1);
+		});
+
+		it('updates an existing annotation', async () => {
+			await annotations.upsert(
+				'book-sha256',
+				'epubcfi(/test/range)',
+				{
+					text: 'Original text',
+					highlightColor: 'yellow'
+				}
+			);
+
+			await annotations.upsert(
+				'book-sha256',
+				'epubcfi(/test/range)',
+				{
+					text: 'Original text',
+					highlightColor: 'blue',
+					note: 'Added a note'
+				}
+			);
+
+			const allAnnotations = get(annotations);
+			expect(allAnnotations).toHaveLength(1);
+			expect(allAnnotations[0].highlightColor).toBe('blue');
+			expect(allAnnotations[0].note).toBe('Added a note');
+		});
+	});
+
+	describe('remove', () => {
+		it('removes an annotation', async () => {
+			await annotations.upsert(
+				'book-sha256',
+				'epubcfi(/test/range)',
+				{
+					text: 'Highlighted text',
+					highlightColor: 'yellow'
+				}
+			);
+
+			expect(get(annotations)).toHaveLength(1);
+
+			await annotations.remove('book-sha256', 'epubcfi(/test/range)');
+
+			expect(get(annotations)).toHaveLength(0);
+		});
+	});
+
+	describe('chatThreadIds', () => {
+		it('adds a chat thread to an annotation', async () => {
+			await annotations.upsert(
+				'book-sha256',
+				'epubcfi(/test/range)',
+				{
+					text: 'Highlighted text',
+					highlightColor: 'yellow'
+				}
+			);
+
+			await annotations.addChatThread('book-sha256', 'epubcfi(/test/range)', 'thread-1');
+
+			const allAnnotations = get(annotations);
+			expect(allAnnotations[0].chatThreadIds).toContain('thread-1');
+		});
+
+		it('removes a chat thread from an annotation', async () => {
+			await annotations.upsert(
+				'book-sha256',
+				'epubcfi(/test/range)',
+				{
+					text: 'Highlighted text',
+					highlightColor: 'yellow',
+					chatThreadIds: ['thread-1', 'thread-2']
+				}
+			);
+
+			await annotations.removeChatThread('book-sha256', 'epubcfi(/test/range)', 'thread-1');
+
+			const allAnnotations = get(annotations);
+			expect(allAnnotations[0].chatThreadIds).not.toContain('thread-1');
+			expect(allAnnotations[0].chatThreadIds).toContain('thread-2');
 		});
 	});
 });

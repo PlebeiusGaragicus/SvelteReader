@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { MessageSquare, Trash2, X, Bot } from '@lucide/svelte';
-	import type { Annotation, AnnotationColor } from '$lib/types';
+	import type { AnnotationLocal, AnnotationColor } from '$lib/types';
 	import { getAnnotationDisplayColor, annotationHasHighlight, annotationHasChat } from '$lib/types';
 
 	interface Props {
-		annotation: Annotation;
+		annotation: AnnotationLocal;
 		position: { x: number; y: number };
 		onUpdateColor: (color: AnnotationColor | null) => void;
 		onUpdateNote: (note: string | undefined) => void;
@@ -84,7 +84,7 @@
 	function handleColorClick(color: AnnotationColor) {
 		if (color === currentHighlightColor) {
 			// Clicking same color - toggle off (but only delete if no other content)
-			if (!annotation.note && !annotation.chatThreadId) {
+			if (!annotation.note && !hasChat) {
 				onDelete();
 			} else {
 				onUpdateColor(null);  // Remove highlight but keep annotation
