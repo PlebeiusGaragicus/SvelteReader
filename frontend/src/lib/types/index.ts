@@ -24,6 +24,13 @@ export interface BookLocal {
 	currentCfi?: string;
 	hasEpubData: boolean;        // false = "ghost book" (annotations only)
 	defaultPublishAnnotations?: boolean;
+	
+	// Nostr sync state
+	isPublic?: boolean;          // Published to Nostr
+	nostrEventId?: string;       // Book announcement event ID
+	nostrCreatedAt?: number;     // Event created_at for LWW
+	relays?: string[];           // Relay URLs where published
+	syncPending?: boolean;       // Local changes not yet published
 }
 
 // Combined book type for runtime use

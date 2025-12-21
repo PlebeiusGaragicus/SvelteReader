@@ -99,13 +99,23 @@
 							<span>{formatTime(syncStore.stats.lastSyncAt)}</span>
 						</div>
 						<div class="flex justify-between">
-							<span>Fetched:</span>
-							<span>{syncStore.stats.fetchedCount} annotations</span>
+							<span>Books:</span>
+							<span>{syncStore.stats.booksFetchedCount} synced</span>
 						</div>
+						<div class="flex justify-between">
+							<span>Annotations:</span>
+							<span>{syncStore.stats.fetchedCount} synced</span>
+						</div>
+						{#if syncStore.stats.ghostBooksCreated > 0}
+							<div class="flex justify-between text-amber-500">
+								<span>Ghost books:</span>
+								<span>{syncStore.stats.ghostBooksCreated}</span>
+							</div>
+						{/if}
 						{#if syncStore.stats.mergedCount > 0}
 							<div class="flex justify-between">
-								<span>Merged:</span>
-								<span>{syncStore.stats.mergedCount} new</span>
+								<span>New items:</span>
+								<span>{syncStore.stats.mergedCount + syncStore.stats.booksMergedCount}</span>
 							</div>
 						{/if}
 					</div>

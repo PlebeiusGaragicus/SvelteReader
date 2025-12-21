@@ -84,10 +84,13 @@
 	$effect(() => {
 		if (cyphertap.isLoggedIn) {
 			annotations.setCyphertap(cyphertap);
+			books.setCyphertap(cyphertap);
 			syncStore.setCyphertap(cyphertap);
 			syncStore.setMergeCallback(annotations.mergeFromNostr);
+			syncStore.setBookMergeCallback(books.mergeFromNostr);
 		} else {
 			annotations.setCyphertap(null);
+			books.setCyphertap(null);
 			syncStore.setCyphertap(null);
 		}
 	});

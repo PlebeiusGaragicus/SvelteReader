@@ -1,8 +1,26 @@
 <script lang="ts">
 	import { books } from '$lib/stores/books';
+	import { annotations } from '$lib/stores/annotations';
+	import { syncStore } from '$lib/stores/sync.svelte';
 	import BookCard from '$lib/components/BookCard.svelte';
 	import ImportButton from '$lib/components/ImportButton.svelte';
 	import { BookOpen } from '@lucide/svelte';
+	import { cyphertap } from 'cyphertap';
+
+	// Set up sync callbacks when logged in (SyncStatusButton is in TopBar)
+	$effect(() => {
+		if (cyphertap.isLoggedIn) {
+			annotations.setCyphertap(cyphertap);
+			books.setCyphertap(cyphertap);
+			syncStore.setCyphertap(cyphertap);
+			syncStore.setMergeCallback(annotations.mergeFromNostr);
+			syncStore.setBookMergeCallback(books.mergeFromNostr);
+		} else {
+			annotations.setCyphertap(null);
+			books.setCyphertap(null);
+			syncStore.setCyphertap(null);
+		}
+	});
 </script>
 
 <main class="container mx-auto px-4 py-8">

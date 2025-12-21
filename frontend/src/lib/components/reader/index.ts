@@ -5,3 +5,4 @@ export { default as AnnotationsPanel } from './AnnotationsPanel.svelte';
 export { default as SettingsPanel } from './SettingsPanel.svelte';
 export { default as ProgressBar } from './ProgressBar.svelte';
 export { default as AnnotationPopup } from './AnnotationPopup.svelte';
+export { default as SyncStatusButton } from './SyncStatusButton.svelte';

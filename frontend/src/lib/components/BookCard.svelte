@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { MoreVertical, Trash2, BookOpen, Ghost, BookX, MessageSquareX, X } from '@lucide/svelte';
+	import { MoreVertical, Trash2, BookOpen, Ghost, BookX, MessageSquareX, X, Upload, Pencil, Globe, AlertCircle } from '@lucide/svelte';
 	import type { Book } from '$lib/stores/books';
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
-	import { removeEpubData } from '$lib/services/storageService';
+	import { removeEpubData, storeEpubData, storeBook, computeSha256 } from '$lib/services/storageService';
+	import BookAnnouncementModal from './BookAnnouncementModal.svelte';
+	import type { BookIdentity } from '$lib/types';
 
 	interface Props {
 		book: Book;
@@ -13,7 +15,10 @@
 	let { book }: Props = $props();
 	let menuOpen = $state(false);
 	let showDeleteModal = $state(false);
+	let showEditModal = $state(false);
+	let showUploadError = $state<string | null>(null);
 	let menuElement: HTMLDivElement | null = $state(null);
+	let fileInputElement: HTMLInputElement | null = $state(null);
 
 	// Convert base64 to data URL for display
 	const coverUrl = $derived(
@@ -25,6 +30,75 @@
 		e.stopPropagation();
 		menuOpen = false;
 		showDeleteModal = true;
+	}
+
+	function openEditModal(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		menuOpen = false;
+		showEditModal = true;
+	}
+
+	function triggerUploadEpub(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		menuOpen = false;
+		fileInputElement?.click();
+	}
+
+	async function handleEpubUpload(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+
+		try {
+			// Read file as ArrayBuffer
+			const arrayBuffer = await file.arrayBuffer();
+			
+			// Compute SHA-256
+			const sha256 = await computeSha256(arrayBuffer);
+			
+			// Verify it matches the ghost book
+			if (sha256 !== book.sha256) {
+				showUploadError = `SHA-256 mismatch. Expected: ${book.sha256.slice(0, 16)}...`;
+				return;
+			}
+			
+			// Store EPUB data
+			await storeEpubData(book.id, arrayBuffer);
+			
+			// Update book to mark as having EPUB data
+			await books.update(book.id, { hasEpubData: true });
+			
+			showUploadError = null;
+			console.log(`[BookCard] EPUB uploaded successfully for ${book.title}`);
+		} catch (err) {
+			console.error('[BookCard] Failed to upload EPUB:', err);
+			showUploadError = 'Failed to process EPUB file';
+		} finally {
+			// Reset file input
+			input.value = '';
+		}
+	}
+
+	async function handleEditSave(updatedBook: BookIdentity, isPublic: boolean) {
+		// Update book metadata
+		await books.update(book.id, {
+			title: updatedBook.title,
+			author: updatedBook.author,
+			year: updatedBook.year,
+			isbn: updatedBook.isbn,
+			coverBase64: updatedBook.coverBase64,
+			isPublic,
+		});
+		
+		// If public, republish to Nostr
+		if (isPublic) {
+			const result = await books.publishBook(book.id);
+			if (!result.success) {
+				console.warn('[BookCard] Failed to republish book:', result.error);
+			}
+		}
 	}
 
 	async function handleDeleteBook(e: MouseEvent) {
@@ -117,7 +191,31 @@
 			</button>
 
 			{#if menuOpen}
-				<div class="absolute right-0 top-full z-10 mt-1 w-32 rounded-md border border-border bg-popover p-1 shadow-lg">
+				<div class="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-lg">
+					{#if !book.hasEpubData}
+						<!-- Ghost book: show Upload EPUB option -->
+						<button
+							onclick={triggerUploadEpub}
+							class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+						>
+							<Upload class="h-4 w-4" />
+							Upload EPUB
+						</button>
+					{/if}
+					<button
+						onclick={openEditModal}
+						class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+					>
+						<Pencil class="h-4 w-4" />
+						Edit Metadata
+					</button>
+					{#if book.isPublic}
+						<div class="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+							<Globe class="h-3 w-3 text-green-500" />
+							Published
+						</div>
+					{/if}
+					<div class="my-1 border-t border-border"></div>
 					<button
 						onclick={openDeleteModal}
 						class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-accent"
@@ -138,6 +236,42 @@
 		{/if}
 	</div>
 </a>
+
+<!-- Hidden file input for EPUB upload -->
+<input
+	bind:this={fileInputElement}
+	type="file"
+	accept=".epub,application/epub+zip"
+	onchange={handleEpubUpload}
+	class="hidden"
+/>
+
+<!-- Upload Error Toast -->
+{#if showUploadError}
+	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+	<div 
+		class="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-destructive bg-destructive/10 px-4 py-3 shadow-lg"
+		onclick={() => showUploadError = null}
+	>
+		<AlertCircle class="h-5 w-5 text-destructive" />
+		<div>
+			<p class="text-sm font-medium text-destructive">Upload Failed</p>
+			<p class="text-xs text-muted-foreground">{showUploadError}</p>
+		</div>
+		<button onclick={() => showUploadError = null} class="ml-2">
+			<X class="h-4 w-4" />
+		</button>
+	</div>
+{/if}
+
+<!-- Edit Metadata Modal -->
+<BookAnnouncementModal
+	book={book}
+	isOpen={showEditModal}
+	isEdit={true}
+	onClose={() => showEditModal = false}
+	onSave={handleEditSave}
+/>
 
 <!-- Delete Confirmation Modal -->
 {#if showDeleteModal}

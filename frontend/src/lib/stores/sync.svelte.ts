@@ -1,40 +1,57 @@
 /**
- * Sync Store - Manages Nostr annotation sync state
+ * Sync Store - Manages Nostr annotation and book sync state
  * 
  * Provides:
  * - Sync status (idle, syncing, error)
  * - Last sync timestamp
- * - Sync statistics
+ * - Sync statistics for both annotations and books
  * - Manual sync trigger
+ * - Ghost book creation for books synced without local EPUB
  */
 
 import { browser } from '$app/environment';
-import { fetchAnnotations, type CyphertapPublisher } from '$lib/services/nostrService';
-import type { Annotation } from '$lib/types';
+import { fetchAnnotations, fetchBooks, type CyphertapPublisher, type BookFetchResult } from '$lib/services/nostrService';
+import type { Annotation, BookIdentity } from '$lib/types';
 
 export type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 
 export interface SyncStats {
 	lastSyncAt: number | null;
+	// Annotation stats
 	fetchedCount: number;
 	mergedCount: number;
 	conflictCount: number;
+	// Book stats
+	booksFetchedCount: number;
+	booksMergedCount: number;
+	ghostBooksCreated: number;
 }
 
 const STORAGE_KEY = 'sveltereader-sync';
 
+const DEFAULT_STATS: SyncStats = {
+	lastSyncAt: null,
+	fetchedCount: 0,
+	mergedCount: 0,
+	conflictCount: 0,
+	booksFetchedCount: 0,
+	booksMergedCount: 0,
+	ghostBooksCreated: 0,
+};
+
 function loadSyncStats(): SyncStats {
-	if (!browser) return { lastSyncAt: null, fetchedCount: 0, mergedCount: 0, conflictCount: 0 };
+	if (!browser) return { ...DEFAULT_STATS };
 	
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
 		if (stored) {
-			return JSON.parse(stored);
+			// Merge with defaults to handle new fields
+			return { ...DEFAULT_STATS, ...JSON.parse(stored) };
 		}
 	} catch (e) {
 		console.error('[Sync] Failed to load sync stats:', e);
 	}
-	return { lastSyncAt: null, fetchedCount: 0, mergedCount: 0, conflictCount: 0 };
+	return { ...DEFAULT_STATS };
 }
 
 function saveSyncStats(stats: SyncStats): void {
@@ -47,6 +64,9 @@ function saveSyncStats(stats: SyncStats): void {
 	}
 }
 
+// Book with Nostr sync metadata from fetch
+export type FetchedBook = BookIdentity & { nostrEventId: string; nostrCreatedAt: number; relays: string[] };
+
 function createSyncStore() {
 	let status = $state<SyncStatus>('idle');
 	let error = $state<string | null>(null);
@@ -54,7 +74,10 @@ function createSyncStore() {
 	let cyphertapInstance: CyphertapPublisher | null = null;
 	
 	// Callback to merge fetched annotations into local store
-	let mergeCallback: ((annotations: Annotation[]) => Promise<{ merged: number; conflicts: number }>) | null = null;
+	let mergeAnnotationsCallback: ((annotations: Annotation[]) => Promise<{ merged: number; conflicts: number }>) | null = null;
+	
+	// Callback to merge fetched books into local store
+	let mergeBooksCallback: ((books: FetchedBook[]) => Promise<{ merged: number; ghostsCreated: number }>) | null = null;
 
 	function setCyphertap(cyphertap: CyphertapPublisher | null): void {
 		cyphertapInstance = cyphertap;
@@ -66,7 +89,11 @@ function createSyncStore() {
 	}
 
 	function setMergeCallback(callback: (annotations: Annotation[]) => Promise<{ merged: number; conflicts: number }>): void {
-		mergeCallback = callback;
+		mergeAnnotationsCallback = callback;
+	}
+
+	function setBookMergeCallback(callback: (books: FetchedBook[]) => Promise<{ merged: number; ghostsCreated: number }>): void {
+		mergeBooksCallback = callback;
 	}
 
 	async function sync(): Promise<boolean> {
@@ -92,29 +119,53 @@ function createSyncStore() {
 		error = null;
 
 		try {
-			const result = await fetchAnnotations(cyphertapInstance);
+			// Fetch both books and annotations in parallel
+			const [booksResult, annotationsResult] = await Promise.all([
+				fetchBooks(cyphertapInstance),
+				fetchAnnotations(cyphertapInstance),
+			]);
 			
-			if (!result.success) {
-				throw new Error(result.error || 'Fetch failed');
+			if (!annotationsResult.success) {
+				throw new Error(annotationsResult.error || 'Annotation fetch failed');
+			}
+			
+			if (!booksResult.success) {
+				throw new Error(booksResult.error || 'Book fetch failed');
 			}
 
-			console.log(`[Sync] Fetched ${result.annotations.length} annotations from Nostr`);
+			console.log(`[Sync] Fetched ${annotationsResult.annotations.length} annotations from Nostr`);
+			console.log(`[Sync] Fetched ${booksResult.books.length} books from Nostr`);
 
-			let merged = 0;
+			// Merge books first (so ghost books exist for annotations)
+			let booksMerged = 0;
+			let ghostsCreated = 0;
+
+			if (mergeBooksCallback && booksResult.books.length > 0) {
+				const bookMergeResult = await mergeBooksCallback(booksResult.books);
+				booksMerged = bookMergeResult.merged;
+				ghostsCreated = bookMergeResult.ghostsCreated;
+				console.log(`[Sync] Books merged: ${booksMerged}, Ghost books created: ${ghostsCreated}`);
+			}
+
+			// Then merge annotations
+			let annotationsMerged = 0;
 			let conflicts = 0;
 
-			if (mergeCallback && result.annotations.length > 0) {
-				const mergeResult = await mergeCallback(result.annotations);
-				merged = mergeResult.merged;
+			if (mergeAnnotationsCallback && annotationsResult.annotations.length > 0) {
+				const mergeResult = await mergeAnnotationsCallback(annotationsResult.annotations);
+				annotationsMerged = mergeResult.merged;
 				conflicts = mergeResult.conflicts;
-				console.log(`[Sync] Merged: ${merged}, Conflicts: ${conflicts}`);
+				console.log(`[Sync] Annotations merged: ${annotationsMerged}, Conflicts: ${conflicts}`);
 			}
 
 			stats = {
 				lastSyncAt: Date.now(),
-				fetchedCount: result.annotations.length,
-				mergedCount: merged,
+				fetchedCount: annotationsResult.annotations.length,
+				mergedCount: annotationsMerged,
 				conflictCount: conflicts,
+				booksFetchedCount: booksResult.books.length,
+				booksMergedCount: booksMerged,
+				ghostBooksCreated: ghostsCreated,
 			};
 			saveSyncStats(stats);
 
@@ -141,7 +192,7 @@ function createSyncStore() {
 	function reset(): void {
 		status = 'idle';
 		error = null;
-		stats = { lastSyncAt: null, fetchedCount: 0, mergedCount: 0, conflictCount: 0 };
+		stats = { ...DEFAULT_STATS };
 		saveSyncStats(stats);
 	}
 
@@ -155,6 +206,7 @@ function createSyncStore() {
 		
 		setCyphertap,
 		setMergeCallback,
+		setBookMergeCallback,
 		sync,
 		reset,
 	};
