@@ -2,8 +2,8 @@
 
 import type { Annotation, AnnotationColor, AnnotationLocal } from './index';
 
-// Kind 30078 - Addressable event for annotations
-export const ANNOTATION_EVENT_KIND = 30078;
+// Kind 30800 - Addressable event for annotations (parameterized replaceable)
+export const ANNOTATION_EVENT_KIND = 30800;
 
 // Content structure for annotation events
 export interface AnnotationEventContent {

@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { Cloud, CloudOff, RefreshCw, Check, AlertCircle } from '@lucide/svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
+	import { cyphertap } from 'cyphertap';
 
 	let showPopover = $state(false);
-	let buttonElement: HTMLButtonElement;
+	let popoverElement: HTMLDivElement;
+
+	// Use CypherTap's reactive login state directly
+	const isLoggedIn = $derived(cyphertap.isLoggedIn);
 
 	function formatTime(timestamp: number | null): string {
 		if (!timestamp) return 'Never';
@@ -24,25 +28,28 @@
 	}
 
 	function handleClickOutside(event: MouseEvent) {
-		if (buttonElement && !buttonElement.contains(event.target as Node)) {
-			const popover = document.getElementById('sync-popover');
-			if (popover && !popover.contains(event.target as Node)) {
-				showPopover = false;
-			}
+		const target = event.target as Node;
+		if (popoverElement && !popoverElement.contains(target)) {
+			showPopover = false;
 		}
 	}
 
 	$effect(() => {
 		if (showPopover) {
-			document.addEventListener('click', handleClickOutside);
-			return () => document.removeEventListener('click', handleClickOutside);
+			// Delay adding listener to avoid immediate close from the opening click
+			const timeout = setTimeout(() => {
+				document.addEventListener('click', handleClickOutside);
+			}, 10);
+			return () => {
+				clearTimeout(timeout);
+				document.removeEventListener('click', handleClickOutside);
+			};
 		}
 	});
 </script>
 
 <div class="relative">
 	<button
-		bind:this={buttonElement}
 		onclick={() => showPopover = !showPopover}
 		class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showPopover ? 'bg-accent' : ''}"
 		aria-label="Sync status"
@@ -53,7 +60,7 @@
 			<Check class="h-5 w-5 text-green-500" />
 		{:else if syncStore.status === 'error'}
 			<AlertCircle class="h-5 w-5 text-red-500" />
-		{:else if syncStore.isLoggedIn}
+		{:else if isLoggedIn}
 			<Cloud class="h-5 w-5 text-blue-500" />
 		{:else}
 			<CloudOff class="h-5 w-5 text-muted-foreground" />
@@ -62,13 +69,13 @@
 
 	{#if showPopover}
 		<div
-			id="sync-popover"
+			bind:this={popoverElement}
 			class="absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-border bg-background shadow-lg"
 		>
 			<div class="p-4 space-y-3">
 				<div class="flex items-center justify-between">
 					<h3 class="font-medium text-sm">Nostr Sync</h3>
-					{#if syncStore.isLoggedIn}
+					{#if isLoggedIn}
 						<span class="text-xs text-green-500 flex items-center gap-1">
 							<span class="h-2 w-2 rounded-full bg-green-500"></span>
 							Connected
@@ -110,7 +117,7 @@
 
 				<button
 					onclick={handleSync}
-					disabled={!syncStore.isLoggedIn || syncStore.status === 'syncing'}
+					disabled={!isLoggedIn || syncStore.status === 'syncing'}
 					class="w-full flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
 				>
 					{#if syncStore.status === 'syncing'}

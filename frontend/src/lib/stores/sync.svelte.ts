@@ -58,6 +58,11 @@ function createSyncStore() {
 
 	function setCyphertap(cyphertap: CyphertapPublisher | null): void {
 		cyphertapInstance = cyphertap;
+		// Clear error state when CypherTap connects (user logged in)
+		if (cyphertap && status === 'error') {
+			status = 'idle';
+			error = null;
+		}
 	}
 
 	function setMergeCallback(callback: (annotations: Annotation[]) => Promise<{ merged: number; conflicts: number }>): void {
@@ -144,7 +149,9 @@ function createSyncStore() {
 		get status() { return status; },
 		get error() { return error; },
 		get stats() { return stats; },
-		get isLoggedIn() { return cyphertapInstance?.isLoggedIn ?? false; },
+		// Note: For reactive login state in UI, use cyphertap.isLoggedIn directly
+		// This getter is for internal use only (e.g., in sync() function)
+		get hasCyphertap() { return cyphertapInstance !== null; },
 		
 		setCyphertap,
 		setMergeCallback,

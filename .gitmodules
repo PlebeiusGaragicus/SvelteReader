@@ -1,6 +1,8 @@
 [submodule "cyphertap"]
 	path = cyphertap
 	url = https://github.com/PlebeiusGaragicus/cyphertap.git
+	branch = 'main'
 [submodule "fullstack-chat-client"]
 	path = fullstack-chat-client
 	url = https://github.com/PlebeiusGaragicus/fullstack-chat-client
+	branch = 'main'
