@@ -1,167 +1,161 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
-import { removeEpubData } from '$lib/services/storageService';
-import type { Book, Annotation } from '$lib/types';
-import { AppError } from '$lib/types';
+import {
+	removeEpubData,
+	storeBook,
+	getBook,
+	getAllBooks,
+	deleteBook as deleteBookFromDB,
+	getAnnotationsByBook,
+	deleteAnnotationsByBook
+} from '$lib/services/storageService';
+import type { Book } from '$lib/types';
 
 // Re-export types for backward compatibility
-export type { Book, Annotation } from '$lib/types';
+export type { Book } from '$lib/types';
 
-const STORAGE_KEY = 'sveltereader-books';
+// In-memory store for books
+const { subscribe, set, update } = writable<Book[]>([]);
 
-interface StoredBook {
-	id: string;
-	title: string;
-	author: string;
-	coverUrl?: string;
-	progress: number;
-	totalPages: number;
-	currentPage: number;
-	lastRead?: string;
-	annotations: Array<Omit<Annotation, 'createdAt'> & { createdAt: string }>;
-	currentCfi?: string;
-}
+// Track if store has been initialized from IndexedDB
+let initialized = false;
 
-function deserializeBook(stored: StoredBook): Book {
-	return {
-		...stored,
-		lastRead: stored.lastRead ? new Date(stored.lastRead) : undefined,
-		annotations: stored.annotations.map((a) => ({
-			...a,
-			createdAt: new Date(a.createdAt)
-		}))
-	};
-}
-
-function loadBooksFromStorage(): Book[] {
-	if (!browser) return [];
+// Initialize store from IndexedDB
+async function initializeStore(): Promise<void> {
+	if (!browser || initialized) return;
+	
 	try {
-		const stored = localStorage.getItem(STORAGE_KEY);
-		if (stored) {
-			const books: StoredBook[] = JSON.parse(stored);
-			return books.map(deserializeBook);
-		}
+		const books = await getAllBooks();
+		set(books);
+		initialized = true;
 	} catch (e) {
-		console.error('Failed to load books from storage:', e);
-		// Don't throw - return empty array and let user re-import
-	}
-	return [];
-}
-
-function saveBooksToStorage(books: Book[]): void {
-	if (!browser) return;
-	try {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
-	} catch (e) {
-		console.error('Failed to save books to storage:', e);
-		// Storage quota exceeded or other error
-		throw new AppError(
-			'Failed to save book data. Your browser storage may be full.',
-			'STORAGE_WRITE_FAILED',
-			true
-		);
+		console.error('Failed to initialize books store:', e);
 	}
 }
 
-function createBooksStore() {
-	const initialBooks = loadBooksFromStorage();
-	const { subscribe, set, update } = writable<Book[]>(initialBooks);
-
-	return {
-		subscribe,
-		addBook: (book: Omit<Book, 'id' | 'annotations'>): string => {
-			const id = crypto.randomUUID();
-			update((books) => {
-				const newBooks = [...books, { ...book, id, annotations: [] }];
-				saveBooksToStorage(newBooks);
-				return newBooks;
-			});
-			return id;
-		},
-		removeBook: (id: string) => {
-			removeEpubData(id);
-			update((books) => {
-				const newBooks = books.filter((b) => b.id !== id);
-				saveBooksToStorage(newBooks);
-				return newBooks;
-			});
-		},
-		updateProgress: (id: string, currentPage: number, currentCfi?: string) => {
-			update((books) => {
-				const newBooks = books.map((b) =>
-					b.id === id
-						? {
-								...b,
-								currentPage,
-								progress: Math.round((currentPage / b.totalPages) * 100),
-								lastRead: new Date(),
-								currentCfi: currentCfi ?? b.currentCfi
-							}
-						: b
-				);
-				saveBooksToStorage(newBooks);
-				return newBooks;
-			});
-		},
-		addAnnotation: (bookId: string, annotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'>) => {
-			update((books) => {
-				const newBooks = books.map((b) =>
-					b.id === bookId
-						? {
-								...b,
-								annotations: [
-									...b.annotations,
-									{
-										...annotation,
-										id: crypto.randomUUID(),
-										bookId,
-										createdAt: new Date()
-									}
-								]
-							}
-						: b
-				);
-				saveBooksToStorage(newBooks);
-				return newBooks;
-			});
-		},
-		removeAnnotation: (bookId: string, annotationId: string) => {
-			update((books) => {
-				const newBooks = books.map((b) =>
-					b.id === bookId
-						? {
-								...b,
-								annotations: b.annotations.filter((a) => a.id !== annotationId)
-							}
-						: b
-				);
-				saveBooksToStorage(newBooks);
-				return newBooks;
-			});
-		},
-		updateAnnotation: (bookId: string, annotationId: string, updates: Partial<Omit<Annotation, 'id' | 'bookId' | 'createdAt'>>) => {
-			update((books) => {
-				const newBooks = books.map((b) =>
-					b.id === bookId
-						? {
-								...b,
-								annotations: b.annotations.map((a) =>
-									a.id === annotationId ? { ...a, ...updates } : a
-								)
-							}
-						: b
-				);
-				saveBooksToStorage(newBooks);
-				return newBooks;
-			});
-		},
-		reset: () => {
-			set([]);
-			if (browser) {
-				localStorage.removeItem(STORAGE_KEY);
-			}
-		}
-	};
+// Ensure store is initialized before operations
+async function ensureInitialized(): Promise<void> {
+	if (!initialized) {
+		await initializeStore();
+	}
 }
 
-export const books = createBooksStore();
+// Add a new book
+async function addBook(book: Omit<Book, 'id'>): Promise<string> {
+	await ensureInitialized();
+	
+	const id = crypto.randomUUID();
+	const newBook: Book = { ...book, id };
+	
+	await storeBook(newBook);
+	
+	update(books => [...books, newBook]);
+	
+	return id;
+}
+
+// Remove a book (keeps annotations as ghost book if they exist)
+async function removeBook(id: string, deleteAnnotations: boolean = false): Promise<void> {
+	await ensureInitialized();
+	
+	const currentBooks = get({ subscribe });
+	const book = currentBooks.find(b => b.id === id);
+	
+	if (!book) return;
+	
+	// Always remove EPUB data and locations
+	await removeEpubData(id);
+	
+	if (deleteAnnotations) {
+		// Delete annotations and book completely
+		await deleteAnnotationsByBook(book.sha256);
+		await deleteBookFromDB(id);
+		update(books => books.filter(b => b.id !== id));
+	} else {
+		// Check if there are annotations for this book
+		const annotations = await getAnnotationsByBook(book.sha256);
+		
+		if (annotations.length > 0) {
+			// Convert to ghost book
+			const ghostBook: Book = {
+				...book,
+				hasEpubData: false
+			};
+			await storeBook(ghostBook);
+			update(books => books.map(b => b.id === id ? ghostBook : b));
+		} else {
+			// No annotations, delete completely
+			await deleteBookFromDB(id);
+			update(books => books.filter(b => b.id !== id));
+		}
+	}
+}
+
+// Update book progress
+async function updateProgress(id: string, currentPage: number, currentCfi?: string): Promise<void> {
+	await ensureInitialized();
+	
+	const currentBooks = get({ subscribe });
+	const book = currentBooks.find(b => b.id === id);
+	
+	if (!book) return;
+	
+	const updatedBook: Book = {
+		...book,
+		currentPage,
+		progress: Math.round((currentPage / book.totalPages) * 100),
+		currentCfi: currentCfi ?? book.currentCfi
+	};
+	
+	await storeBook(updatedBook);
+	
+	update(books => books.map(b => b.id === id ? updatedBook : b));
+}
+
+// Update book metadata
+async function updateBook(id: string, updates: Partial<Omit<Book, 'id' | 'sha256'>>): Promise<void> {
+	await ensureInitialized();
+	
+	const currentBooks = get({ subscribe });
+	const book = currentBooks.find(b => b.id === id);
+	
+	if (!book) return;
+	
+	const updatedBook: Book = { ...book, ...updates };
+	
+	await storeBook(updatedBook);
+	
+	update(books => books.map(b => b.id === id ? updatedBook : b));
+}
+
+// Get a book by ID
+async function getBookById(id: string): Promise<Book | null> {
+	await ensureInitialized();
+	
+	const currentBooks = get({ subscribe });
+	return currentBooks.find(b => b.id === id) ?? null;
+}
+
+// Get a book by SHA-256
+function getBookBySha256(sha256: string): Book | null {
+	const currentBooks = get({ subscribe });
+	return currentBooks.find(b => b.sha256 === sha256) ?? null;
+}
+
+// Reset store (for testing/clearing data)
+function reset(): void {
+	set([]);
+	initialized = false;
+}
+
+export const books = {
+	subscribe,
+	initialize: initializeStore,
+	add: addBook,
+	remove: removeBook,
+	updateProgress,
+	update: updateBook,
+	getById: getBookById,
+	getBySha256: getBookBySha256,
+	reset
+};

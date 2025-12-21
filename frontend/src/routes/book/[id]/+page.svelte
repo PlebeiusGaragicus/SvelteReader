@@ -4,10 +4,11 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { mode } from 'mode-watcher';
 	import { books } from '$lib/stores/books';
+	import { annotations } from '$lib/stores/annotations';
 	import { getEpubData } from '$lib/services/storageService';
 	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
-	import type { TocItem, LocationInfo, AnnotationColor, Annotation } from '$lib/types';
-	import { AppError, ERROR_MESSAGES } from '$lib/types';
+	import type { TocItem, LocationInfo, AnnotationColor, AnnotationLocal, AnnotationDisplay } from '$lib/types';
+	import { AppError, ERROR_MESSAGES, getAnnotationKey } from '$lib/types';
 	import { Loader2 } from '@lucide/svelte';
 	import {
 		ReaderHeader,
@@ -20,12 +21,17 @@
 	} from '$lib/components/reader';
 	import { ChatThread } from '$lib/components/chat';
 	import type { PassageContext } from '$lib/types/chat';
-	import { cyphertap } from 'cyphertap';
+	import { cyphertap, isUserMenuOpen } from 'cyphertap';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
+	import { syncStore } from '$lib/stores/sync.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { getThreads } from '$lib/services/langgraph';
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
+	
+	// Get annotations for this book (reactive)
+	const bookAnnotations = $derived(book ? $annotations.filter(a => a.bookSha256 === book.sha256) : []);
 
 	// Panel visibility state
 	let showTOC = $state(false);
@@ -52,7 +58,7 @@
 	let textSelection = $state<TextSelection | null>(null);
 
 	// Highlight edit state
-	let editingAnnotation = $state<{ annotation: Annotation; position: { x: number; y: number } } | null>(null);
+	let editingAnnotation = $state<{ annotation: AnnotationLocal; position: { x: number; y: number } } | null>(null);
 
 	// AI Chat state - passage context for the chat
 	let chatPassageContext = $state<PassageContext | null>(null);
@@ -74,6 +80,28 @@
 		});
 	});
 
+	// Set CypherTap instance for annotation Nostr publishing and sync
+	$effect(() => {
+		if (cyphertap.isLoggedIn) {
+			annotations.setCyphertap(cyphertap);
+			syncStore.setCyphertap(cyphertap);
+			syncStore.setMergeCallback(annotations.mergeFromNostr);
+		} else {
+			annotations.setCyphertap(null);
+			syncStore.setCyphertap(null);
+		}
+	});
+
+	// Auto-sync on login if auto-publish is enabled
+	let hasSyncedOnLogin = $state(false);
+	$effect(() => {
+		if (cyphertap.isLoggedIn && settingsStore.autoPublishAnnotations && !hasSyncedOnLogin && isBookReady) {
+			hasSyncedOnLogin = true;
+			console.log('[Reader] Auto-syncing annotations on login...');
+			syncStore.sync();
+		}
+	});
+
 	// Payment generator for chat messages
 	const generatePayment = wallet.createPaymentGenerator(cyphertap);
 
@@ -81,6 +109,14 @@
 	$effect(() => {
 		if (isBookReady && mode.current) {
 			epubService.applyTheme(mode.current === 'dark' ? 'dark' : 'light');
+		}
+	});
+
+	// Reload annotations in epub reader when store changes (e.g., after sync)
+	$effect(() => {
+		if (isBookReady && book && bookAnnotations) {
+			// This effect runs whenever bookAnnotations changes
+			epubService.loadAnnotations(bookAnnotations);
 		}
 	});
 
@@ -111,9 +147,9 @@
 	 * With composable model, an annotation is valid if it has ANY of:
 	 * - highlightColor (visible highlight)
 	 * - note (user note)
-	 * - valid chatThreadId (AI chat thread)
+	 * - valid chatThreadIds (AI chat threads)
 	 * 
-	 * If chatThreadId is orphaned, we clear it but keep the annotation
+	 * If chatThreadIds are orphaned, we clear them but keep the annotation
 	 * if it has other properties (highlight or note).
 	 */
 	async function reconcileAnnotations(): Promise<void> {
@@ -124,30 +160,26 @@
 			const existingThreads = await getThreads();
 			const existingThreadIds = new Set(existingThreads.map(t => t.thread_id));
 			
-			for (const annotation of book.annotations) {
-				// Check if annotation has an orphaned chatThreadId
-				const hasOrphanedThread = annotation.chatThreadId && !existingThreadIds.has(annotation.chatThreadId);
+			for (const annotation of bookAnnotations) {
+				// Check if annotation has orphaned chatThreadIds
+				const orphanedThreadIds = (annotation.chatThreadIds || []).filter(id => !existingThreadIds.has(id));
 				
-				if (!hasOrphanedThread) continue;
+				if (orphanedThreadIds.length === 0) continue;
 				
-				console.log(`[Reconcile] Orphaned thread: ${annotation.id} -> thread ${annotation.chatThreadId}`);
+				const key = getAnnotationKey(annotation.bookSha256, annotation.cfiRange);
+				console.log(`[Reconcile] Orphaned threads: ${key} -> ${orphanedThreadIds.join(', ')}`);
 				
-				// Check what other properties the annotation has
-				const hasHighlight = !!annotation.highlightColor;
-				const hasNote = !!annotation.note;
+				// Remove orphaned thread IDs
+				for (const threadId of orphanedThreadIds) {
+					await annotations.removeChatThread(annotation.bookSha256, annotation.cfiRange, threadId);
+				}
 				
-				if (hasHighlight || hasNote) {
-					// Has other properties - just clear the chatThreadId
-					console.log(`[Reconcile] Clearing orphaned threadId: ${annotation.id}`);
-					books.updateAnnotation(book.id, annotation.id, { 
-						chatThreadId: undefined
-					});
-					epubService.updateHighlight({ ...annotation, chatThreadId: undefined });
-				} else {
-					// Only had chat - remove entirely
-					console.log(`[Reconcile] Removing orphaned annotation: ${annotation.id}`);
-					epubService.removeHighlight(annotation.cfiRange);
-					books.removeAnnotation(book.id, annotation.id);
+				// Update highlight visual
+				const updatedAnnotation = bookAnnotations.find(a => 
+					a.bookSha256 === annotation.bookSha256 && a.cfiRange === annotation.cfiRange
+				);
+				if (updatedAnnotation) {
+					epubService.updateHighlight(updatedAnnotation);
 				}
 			}
 		} catch (e) {
@@ -158,7 +190,15 @@
 	onMount(async () => {
 		setReadingMode(true);
 
-		if (!book) {
+		// Ensure stores are initialized before checking for book
+		await books.initialize();
+		await annotations.initialize();
+
+		// Re-check for book after initialization
+		const currentBooks = $books;
+		const foundBook = currentBooks.find((b) => b.id === bookId);
+		
+		if (!foundBook) {
 			loadError = ERROR_MESSAGES.BOOK_NOT_FOUND;
 			errorCode = 'BOOK_NOT_FOUND';
 			isLoading = false;
@@ -166,7 +206,7 @@
 		}
 
 		try {
-			const epubData = await getEpubData(book.id);
+			const epubData = await getEpubData(foundBook.id);
 			if (!epubData) {
 				loadError = ERROR_MESSAGES.EPUB_NOT_FOUND;
 				errorCode = 'EPUB_NOT_FOUND';
@@ -191,8 +231,8 @@
 			});
 			
 			await epubService.renderBook(readerContainer, {
-				startCfi: book.currentCfi,
-				bookId: book.id
+				startCfi: foundBook.currentCfi,
+				bookId: foundBook.id
 			});
 
 			// Apply initial theme based on current mode
@@ -202,8 +242,9 @@
 			isLoading = false;
 
 			// Load existing annotations as highlights
-			if (book.annotations.length > 0) {
-				epubService.loadAnnotations(book.annotations);
+			const currentAnnotations = $annotations.filter(a => a.bookSha256 === foundBook.sha256);
+			if (currentAnnotations.length > 0) {
+				epubService.loadAnnotations(currentAnnotations);
 			}
 
 			// Reconcile annotations with threads (clean up orphaned ai-chat annotations)
@@ -216,7 +257,7 @@
 			// Track location changes
 			epubService.onRelocated((location) => {
 				currentLocation = location;
-				books.updateProgress(book.id, location.page, location.cfi);
+				books.updateProgress(foundBook.id, location.page, location.cfi);
 			});
 
 			// Get initial location
@@ -246,6 +287,8 @@
 				showSettings = false;
 				showAIChat = false;
 				editingAnnotation = null;
+				// Close CypherTap popover
+				isUserMenuOpen.set(false);
 			});
 
 			// Update location and chapter positions when accurate locations become available
@@ -332,7 +375,7 @@
 		showTOC = overlay === 'toc' ? !showTOC : false;
 		showAnnotations = overlay === 'annotations' ? !showAnnotations : false;
 		showSettings = overlay === 'settings' ? !showSettings : false;
-		
+				
 		// For AI chat, clear context when toggling from header (not from annotation)
 		if (overlay === 'ai-chat') {
 			const wasOpen = showAIChat;
@@ -347,17 +390,14 @@
 		}
 	}
 
-	function deleteAnnotation(annotationId: string): void {
+	function deleteAnnotation(bookSha256: string, cfiRange: string): void {
 		if (book) {
-			const annotation = book.annotations.find(a => a.id === annotationId);
-			if (annotation) {
-				epubService.removeHighlight(annotation.cfiRange);
-			}
-			books.removeAnnotation(book.id, annotationId);
+			epubService.removeHighlight(cfiRange);
+			annotations.remove(bookSha256, cfiRange);
 		}
 	}
 
-	function navigateToAnnotation(annotation: Annotation): void {
+	function navigateToAnnotation(annotation: AnnotationLocal): void {
 		epubService.goToCfiWithHighlight(annotation.cfiRange);
 		showAnnotations = false;
 	}
@@ -370,50 +410,55 @@
 	}
 
 	// Unified handler for saving annotations (both new and editing)
-	function handleAnnotationSave(data: AnnotationSaveData): void {
+	async function handleAnnotationSave(data: AnnotationSaveData): Promise<void> {
 		if (!book || !currentLocation) return;
 
 		if (editingAnnotation) {
 			// Editing existing annotation - merge composable properties
-			const updateData: Partial<Annotation> = {
-				highlightColor: data.highlightColor,
-				note: data.note,
-				chatThreadId: data.chatThreadId ?? editingAnnotation.annotation.chatThreadId,
-			};
-			const updatedAnnotation = { ...editingAnnotation.annotation, ...updateData };
-			books.updateAnnotation(book.id, editingAnnotation.annotation.id, updateData);
+			const existingThreadIds = editingAnnotation.annotation.chatThreadIds || [];
+			const chatThreadIds = data.chatThreadId && !existingThreadIds.includes(data.chatThreadId)
+				? [...existingThreadIds, data.chatThreadId]
+				: existingThreadIds;
+			
+			const updatedAnnotation = await annotations.upsert(
+				editingAnnotation.annotation.bookSha256,
+				editingAnnotation.annotation.cfiRange,
+				{
+					text: editingAnnotation.annotation.text,
+					highlightColor: data.highlightColor,
+					note: data.note,
+					chatThreadIds
+				}
+			);
 			epubService.updateHighlight(updatedAnnotation);
-			editingAnnotation = { ...editingAnnotation, annotation: updatedAnnotation };
+			// Don't update editingAnnotation here - popup will close via onClose callback
 		} else if (textSelection) {
 			// Creating new annotation with composable properties
-			const newAnnotation: Omit<Annotation, 'id' | 'bookId' | 'createdAt'> = {
-				cfiRange: textSelection.cfiRange,
-				text: textSelection.text,
-				note: data.note,
-				page: currentLocation.page,
-				highlightColor: data.highlightColor,
-				chatThreadId: data.chatThreadId,
-			};
+			const chatThreadIds = data.chatThreadId ? [data.chatThreadId] : undefined;
+			
+			const newAnnotation = await annotations.upsert(
+				book.sha256,
+				textSelection.cfiRange,
+				{
+					text: textSelection.text,
+					highlightColor: data.highlightColor,
+					note: data.note,
+					chatThreadIds
+				}
+			);
 
-			books.addAnnotation(book.id, newAnnotation);
-
-			epubService.addHighlight({
-				...newAnnotation,
-				id: '',
-				bookId: book.id,
-				createdAt: new Date()
-			} as Annotation);
+			epubService.addHighlight(newAnnotation);
 
 			epubService.clearSelection();
 			textSelection = null;
 		}
 	}
 
-	function handleAnnotationDelete(): void {
+	async function handleAnnotationDelete(): Promise<void> {
 		if (!book || !editingAnnotation) return;
 		
 		epubService.removeHighlight(editingAnnotation.annotation.cfiRange);
-		books.removeAnnotation(book.id, editingAnnotation.annotation.id);
+		await annotations.remove(editingAnnotation.annotation.bookSha256, editingAnnotation.annotation.cfiRange);
 		editingAnnotation = null;
 	}
 
@@ -425,28 +470,23 @@
 		editingAnnotation = null;
 	}
 
-	function handleChatThreadDelete(threadId: string): void {
+	async function handleChatThreadDelete(threadId: string): Promise<void> {
 		if (!book) return;
 		
 		// Find annotations linked to this thread
-		const linkedAnnotations = book.annotations.filter(a => a.chatThreadId === threadId);
+		const linkedAnnotations = bookAnnotations.filter(a => 
+			a.chatThreadIds && a.chatThreadIds.includes(threadId)
+		);
 		
 		for (const annotation of linkedAnnotations) {
-			// Check if annotation has other properties (highlight or note)
-			const hasHighlight = !!annotation.highlightColor;
-			const hasNote = !!annotation.note;
+			await annotations.removeChatThread(annotation.bookSha256, annotation.cfiRange, threadId);
 			
-			if (!hasHighlight && !hasNote) {
-				// Only had chat - remove entire annotation
-				epubService.removeHighlight(annotation.cfiRange);
-				books.removeAnnotation(book.id, annotation.id);
-			} else {
-				// Has other properties - just clear the chatThreadId
-				books.updateAnnotation(book.id, annotation.id, { 
-					chatThreadId: undefined
-				});
-				// Update the visual highlight
-				epubService.updateHighlight({ ...annotation, chatThreadId: undefined });
+			// Get updated annotation to refresh highlight
+			const updated = bookAnnotations.find(a => 
+				a.bookSha256 === annotation.bookSha256 && a.cfiRange === annotation.cfiRange
+			);
+			if (updated) {
+				epubService.updateHighlight(updated);
 			}
 		}
 	}
@@ -543,9 +583,9 @@
 
 		{#if showAnnotations}
 			<AnnotationsPanel
-				annotations={book.annotations}
+				annotations={bookAnnotations}
 				onClose={() => (showAnnotations = false)}
-				onDelete={deleteAnnotation}
+				onDelete={(a) => deleteAnnotation(a.bookSha256, a.cfiRange)}
 				onNavigate={navigateToAnnotation}
 			/>
 		{/if}
@@ -581,18 +621,21 @@
 					showHistory={true}
 					initialThreadId={chatInitialThreadId || undefined}
 					{generatePayment}
-					onThreadChange={(threadId) => {
+					onThreadChange={async (threadId) => {
 						// Update the annotation with the new thread ID (preserve other properties)
 						if (book && threadId && chatCfiRange) {
-							const existingAnnotation = book.annotations.find(a => a.cfiRange === chatCfiRange);
+							const existingAnnotation = bookAnnotations.find(a => a.cfiRange === chatCfiRange);
 							if (existingAnnotation) {
-								// Only update chatThreadId - preserve highlightColor, note, etc.
-								books.updateAnnotation(book.id, existingAnnotation.id, { 
-									chatThreadId: threadId
-								});
-								epubService.updateHighlight({ ...existingAnnotation, chatThreadId: threadId });
+								// Add thread ID to annotation
+								await annotations.addChatThread(existingAnnotation.bookSha256, existingAnnotation.cfiRange, threadId);
+								// Get updated annotation and refresh highlight
+								const updated = bookAnnotations.find(a => 
+									a.bookSha256 === existingAnnotation.bookSha256 && a.cfiRange === existingAnnotation.cfiRange
+								);
+								if (updated) {
+									epubService.updateHighlight(updated);
+								}
 							}
-							chatAnnotationId = existingAnnotation?.id || null;
 						}
 						console.log('Thread changed:', threadId);
 					}}

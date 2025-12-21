@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { X, Highlighter, MessageSquare, Trash2, Bot } from '@lucide/svelte';
-	import type { Annotation, AnnotationColor } from '$lib/types';
-	import { annotationHasHighlight, annotationHasNote, annotationHasChat, getAnnotationDisplayColor } from '$lib/types';
+	import type { AnnotationLocal, AnnotationColor } from '$lib/types';
+	import { annotationHasHighlight, annotationHasNote, annotationHasChat, getAnnotationDisplayColor, getAnnotationKey } from '$lib/types';
 
 	interface Props {
-		annotations: Annotation[];
+		annotations: AnnotationLocal[];
 		onClose: () => void;
-		onDelete: (annotationId: string) => void;
-		onNavigate: (annotation: Annotation) => void;
+		onDelete: (annotation: AnnotationLocal) => void;
+		onNavigate: (annotation: AnnotationLocal) => void;
 	}
 
 	let { annotations, onClose, onDelete, onNavigate }: Props = $props();
@@ -33,7 +33,7 @@
 	});
 
 	// Get visual style based on composable properties
-	function getColorClass(annotation: Annotation): string {
+	function getColorClass(annotation: AnnotationLocal): string {
 		const displayColor = getAnnotationDisplayColor(annotation);
 		const hasChat = annotationHasChat(annotation);
 		const hasNote = annotationHasNote(annotation);
@@ -92,7 +92,7 @@
 			</div>
 		{:else}
 			<div class="space-y-3">
-				{#each annotations as annotation (annotation.id)}
+				{#each annotations as annotation (getAnnotationKey(annotation.bookSha256, annotation.cfiRange))}
 					<div
 						class="rounded-lg border {getColorClass(annotation)} p-3 transition-all hover:shadow-md cursor-pointer"
 						onclick={() => onNavigate(annotation)}
@@ -107,16 +107,15 @@
 								<p class="text-sm text-muted-foreground">{annotation.note}</p>
 							</div>
 						{/if}
-						{#if annotation.chatThreadId}
+						{#if annotationHasChat(annotation)}
 							<div class="mt-2 flex items-center gap-1 text-xs text-blue-500">
 								<Bot class="h-3 w-3" />
-								<span>Has AI chat</span>
+								<span>Has AI chat ({annotation.chatThreadIds?.length || 0})</span>
 							</div>
 						{/if}
-						<div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-							<span>Page {annotation.page}</span>
+						<div class="mt-2 flex items-center justify-end text-xs text-muted-foreground">
 							<button
-								onclick={(e) => { e.stopPropagation(); onDelete(annotation.id); }}
+								onclick={(e) => { e.stopPropagation(); onDelete(annotation); }}
 								class="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-destructive/10 hover:text-destructive"
 								aria-label="Delete annotation"
 							>

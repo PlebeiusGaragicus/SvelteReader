@@ -1,7 +1,7 @@
 import ePub, { Book, Rendition } from 'epubjs';
 import type { NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
-import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationColor } from '$lib/types';
+import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationLocal, AnnotationColor } from '$lib/types';
 import { AppError, getAnnotationDisplayColor, annotationHasChat, annotationHasNote } from '$lib/types';
 
 // Re-export types for backward compatibility
@@ -32,7 +32,7 @@ export interface TextSelection {
 }
 
 export interface HighlightClickEvent {
-	annotation: Annotation;
+	annotation: AnnotationLocal;
 	position: { x: number; y: number };
 }
 
@@ -48,7 +48,7 @@ class EpubService {
 	private selectionCallback: ((selection: TextSelection | null) => void) | null = null;
 	private highlightClickCallback: ((event: HighlightClickEvent | null) => void) | null = null;
 	private contentClickCallback: (() => void) | null = null;
-	private loadedAnnotations: Annotation[] = [];
+	private loadedAnnotations: AnnotationLocal[] = [];
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
 		const book = ePub(arrayBuffer);
@@ -548,7 +548,7 @@ class EpubService {
 		this.selectionCallback?.(null);
 	}
 
-	addHighlight(annotation: Annotation): void {
+	addHighlight(annotation: AnnotationLocal): void {
 		if (!this.rendition) return;
 
 		const className = this.getHighlightClassNameFromAnnotation(annotation);
@@ -595,7 +595,7 @@ class EpubService {
 		this.rendition.annotations.add(
 			'highlight',
 			annotation.cfiRange,
-			{ id: annotation.id },
+			{ cfiRange: annotation.cfiRange },
 			clickHandler,
 			className,
 			svgStyles
@@ -609,7 +609,7 @@ class EpubService {
 		this.loadedAnnotations = this.loadedAnnotations.filter(a => a.cfiRange !== cfiRange);
 	}
 
-	updateHighlight(annotation: Annotation): void {
+	updateHighlight(annotation: AnnotationLocal): void {
 		if (!this.rendition) return;
 		// Remove old highlight and add new one with updated styles
 		this.rendition.annotations.remove(annotation.cfiRange, 'highlight');
@@ -622,7 +622,7 @@ class EpubService {
 		this.addHighlight(annotation);
 	}
 
-	loadAnnotations(annotations: Annotation[]): void {
+	loadAnnotations(annotations: AnnotationLocal[]): void {
 		if (!this.rendition) return;
 		
 		// Store annotations for re-injection on page changes
@@ -646,7 +646,7 @@ class EpubService {
 	}
 
 	// Get class name based on composable annotation properties
-	private getHighlightClassNameFromAnnotation(annotation: Annotation): string {
+	private getHighlightClassNameFromAnnotation(annotation: AnnotationLocal): string {
 		const displayColor = getAnnotationDisplayColor(annotation);
 		const hasChat = annotationHasChat(annotation);
 		const hasNote = annotationHasNote(annotation);

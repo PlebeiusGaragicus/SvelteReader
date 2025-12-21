@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { MessageSquare, Trash2, X, Bot } from '@lucide/svelte';
-	import type { Annotation, AnnotationColor } from '$lib/types';
-	import { annotationHasHighlight, getAnnotationDisplayColor } from '$lib/types';
+	import type { AnnotationLocal, AnnotationColor } from '$lib/types';
+	import { annotationHasHighlight, annotationHasChat, getAnnotationDisplayColor, getAnnotationKey } from '$lib/types';
 
 	// Composable annotation data - allows highlight + note + chat simultaneously
 	export interface AnnotationSaveData {
@@ -16,13 +16,13 @@
 		selectedText?: string;
 		cfiRange?: string;
 		// For editing existing annotations
-		annotation?: Annotation;
+		annotation?: AnnotationLocal;
 		// Common
 		position: { x: number; y: number };
-		onSave: (data: AnnotationSaveData) => void;
+		onSave: (data: AnnotationSaveData) => void | Promise<void>;
 		onDelete?: () => void;
 		onClose: () => void;
-		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string; annotationId?: string }) => void;
+		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string; annotationKey?: string }) => void;
 	}
 
 	let { 
@@ -48,7 +48,7 @@
 	const displayText = $derived(annotation?.text || selectedText || '');
 	const hasNote = $derived(isEditing && !!annotation?.note);
 	const hasHighlight = $derived(isEditing && annotation ? annotationHasHighlight(annotation) : false);
-	const hasChat = $derived(isEditing && !!annotation?.chatThreadId);
+	const hasChat = $derived(isEditing && annotation ? annotationHasChat(annotation) : false);
 	
 	// Get the current highlight color (using composable model)
 	const currentHighlightColor = $derived(
@@ -125,17 +125,15 @@
 				userSelectedHighlight = true;
 				onSave({ 
 					highlightColor: color,
-					note: annotation.note, 
-					chatThreadId: annotation.chatThreadId
+					note: annotation.note
 				});
 			} else {
 				// Clicking the same color - toggle highlight off (but keep note/chat if present)
-				if (annotation.note || annotation.chatThreadId) {
+				if (annotation.note || annotationHasChat(annotation)) {
 					// Has other properties - just remove highlight
 					onSave({ 
 						highlightColor: null,
-						note: annotation.note, 
-						chatThreadId: annotation.chatThreadId
+						note: annotation.note
 					});
 				} else {
 					// Only has highlight - delete entire annotation
@@ -168,27 +166,32 @@
 			? (annotation?.highlightColor ?? null)
 			: (userSelectedHighlight ? selectedColor : null);
 		
+		// Close popup first to avoid positioning issues during async save
+		onClose();
+		
+		// Then save (fire and forget - errors handled by parent)
 		onSave({ 
 			highlightColor,
-			note,
-			chatThreadId: annotation?.chatThreadId
+			note
 		});
-		if (!isEditing) {
-			onClose();
-		}
-		showNoteInput = false;
 	}
 
 	function handleDeleteNote() {
 		noteText = '';
 		
-		// Remove note but preserve highlight and chat
-		onSave({ 
-			highlightColor: annotation?.highlightColor ?? null,
-			note: undefined, 
-			chatThreadId: annotation?.chatThreadId
-		});
-		showNoteInput = false;
+		// If annotation has highlight or chat threads, just remove the note
+		// Otherwise, delete the entire annotation
+		if (hasHighlight || hasChat) {
+			// Close popup first to avoid positioning issues
+			onClose();
+			onSave({ 
+				highlightColor: annotation?.highlightColor ?? null,
+				note: undefined
+			});
+		} else {
+			// No other content - delete entire annotation
+			onDelete?.();
+		}
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -209,8 +212,9 @@
 		const text = annotation?.text || selectedText || '';
 		const range = annotation?.cfiRange || cfiRange || '';
 		const note = annotation?.note || noteText.trim() || undefined;
-		const existingThreadId = annotation?.chatThreadId;
-		const annotationId = annotation?.id;
+		// Get first thread ID if any exist (for continuing existing chat)
+		const existingThreadId = annotation?.chatThreadIds?.[0];
+		const annotationKey = annotation ? getAnnotationKey(annotation.bookSha256, annotation.cfiRange) : undefined;
 		
 		if (!isEditing) {
 			// For new selections, create annotation for chat context
@@ -220,7 +224,7 @@
 				note: noteText.trim() || undefined
 			});
 		}
-		onOpenAIChat?.({ text, cfiRange: range, note, threadId: existingThreadId, annotationId });
+		onOpenAIChat?.({ text, cfiRange: range, note, threadId: existingThreadId, annotationKey });
 	}
 </script>
 
@@ -294,20 +298,12 @@
 			></textarea>
 			<div class="mt-2 flex justify-between">
 				<div class="flex gap-1">
-					{#if hasNote}
-						<button
-							onclick={handleDeleteNote}
-							class="rounded-md px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-						>
-							Remove note
-						</button>
-					{/if}
 					{#if isEditing}
 						<button
-							onclick={() => onDelete?.()}
+							onclick={handleDeleteNote}
 							class="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-							aria-label="Delete annotation"
-							title="Delete annotation"
+							aria-label={hasHighlight || hasChat ? "Delete note" : "Delete annotation"}
+							title={hasHighlight || hasChat ? "Delete note" : "Delete annotation"}
 						>
 							<Trash2 class="h-3 w-3" />
 							Delete
