@@ -1,10 +1,11 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { Cloud, CloudOff, RefreshCw, Check, AlertCircle } from '@lucide/svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { cyphertap } from 'cyphertap';
 
 	let showPopover = $state(false);
-	let popoverElement: HTMLDivElement;
+	let containerElement: HTMLDivElement;
 
 	// Use CypherTap's reactive login state directly
 	const isLoggedIn = $derived(cyphertap.isLoggedIn);
@@ -27,30 +28,34 @@
 		syncStore.sync();
 	}
 
+	function handleToggle() {
+		showPopover = !showPopover;
+	}
+
+	// Click outside to close
 	function handleClickOutside(event: MouseEvent) {
-		const target = event.target as Node;
-		if (popoverElement && !popoverElement.contains(target)) {
+		if (containerElement && !containerElement.contains(event.target as Node)) {
 			showPopover = false;
 		}
 	}
 
-	$effect(() => {
-		if (showPopover) {
-			// Delay adding listener to avoid immediate close from the opening click
-			const timeout = setTimeout(() => {
-				document.addEventListener('click', handleClickOutside);
-			}, 10);
-			return () => {
-				clearTimeout(timeout);
-				document.removeEventListener('click', handleClickOutside);
-			};
-		}
+	onMount(() => {
+		const timeout = setTimeout(() => {
+			document.addEventListener('click', handleClickOutside);
+		}, 100);
+		
+		return () => {
+			clearTimeout(timeout);
+			document.removeEventListener('click', handleClickOutside);
+		};
 	});
 </script>
 
-<div class="relative">
+<!-- Only show when logged in -->
+{#if isLoggedIn}
+<div class="relative" bind:this={containerElement}>
 	<button
-		onclick={() => showPopover = !showPopover}
+		onclick={handleToggle}
 		class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showPopover ? 'bg-accent' : ''}"
 		aria-label="Sync status"
 	>
@@ -61,7 +66,7 @@
 		{:else if syncStore.status === 'error'}
 			<AlertCircle class="h-5 w-5 text-red-500" />
 		{:else if isLoggedIn}
-			<Cloud class="h-5 w-5 text-blue-500" />
+			<Cloud class="h-5 w-5 text-green-500" />
 		{:else}
 			<CloudOff class="h-5 w-5 text-muted-foreground" />
 		{/if}
@@ -69,8 +74,7 @@
 
 	{#if showPopover}
 		<div
-			bind:this={popoverElement}
-			class="absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-border bg-background shadow-lg"
+			class="sync-popover absolute right-0 top-full z-50 mt-2 w-64 rounded-lg border border-border bg-background shadow-lg"
 		>
 			<div class="p-4 space-y-3">
 				<div class="flex items-center justify-between">
@@ -132,3 +136,4 @@
 		</div>
 	{/if}
 </div>
+{/if}

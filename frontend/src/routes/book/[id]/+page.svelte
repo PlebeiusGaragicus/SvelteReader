@@ -21,7 +21,7 @@
 	} from '$lib/components/reader';
 	import { ChatThread } from '$lib/components/chat';
 	import type { PassageContext } from '$lib/types/chat';
-	import { cyphertap } from 'cyphertap';
+	import { cyphertap, isUserMenuOpen } from 'cyphertap';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
@@ -109,6 +109,14 @@
 	$effect(() => {
 		if (isBookReady && mode.current) {
 			epubService.applyTheme(mode.current === 'dark' ? 'dark' : 'light');
+		}
+	});
+
+	// Reload annotations in epub reader when store changes (e.g., after sync)
+	$effect(() => {
+		if (isBookReady && book && bookAnnotations) {
+			// This effect runs whenever bookAnnotations changes
+			epubService.loadAnnotations(bookAnnotations);
 		}
 	});
 
@@ -279,6 +287,8 @@
 				showSettings = false;
 				showAIChat = false;
 				editingAnnotation = null;
+				// Close CypherTap popover
+				isUserMenuOpen.set(false);
 			});
 
 			// Update location and chapter positions when accurate locations become available
@@ -365,7 +375,7 @@
 		showTOC = overlay === 'toc' ? !showTOC : false;
 		showAnnotations = overlay === 'annotations' ? !showAnnotations : false;
 		showSettings = overlay === 'settings' ? !showSettings : false;
-		
+				
 		// For AI chat, clear context when toggling from header (not from annotation)
 		if (overlay === 'ai-chat') {
 			const wasOpen = showAIChat;

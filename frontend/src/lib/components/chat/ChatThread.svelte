@@ -38,6 +38,7 @@
 	const wallet = useWalletStore();
 
 	let messagesContainer = $state<HTMLDivElement | null>(null);
+	let panelElement: HTMLDivElement;
 	let hideToolCalls = $state(false);
 	let backendAvailable = $state<boolean | null>(null);
 	
@@ -63,8 +64,20 @@
 		chat.messages.filter(m => !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX))
 	);
 
+	// Click outside to close
+	function handleClickOutside(event: MouseEvent) {
+		if (panelElement && !panelElement.contains(event.target as Node)) {
+			onClose?.();
+		}
+	}
+
 	// Check backend health on mount and set up refund callback
 	onMount(() => {
+		// Add click outside listener with delay to avoid immediate close
+		const timeout = setTimeout(() => {
+			document.addEventListener('click', handleClickOutside);
+		}, 100);
+
 		checkHealth().then(available => {
 			backendAvailable = available;
 		});
@@ -88,6 +101,11 @@
 		
 		// Check for any pending payments that need recovery (e.g., from previous session)
 		chat.recoverPendingPayment();
+
+		return () => {
+			clearTimeout(timeout);
+			document.removeEventListener('click', handleClickOutside);
+		};
 	});
 
 	// Track which thread we've already started loading to prevent duplicate loads
@@ -216,7 +234,7 @@
 	}
 </script>
 
-<div class="flex h-full flex-col bg-background">
+<div bind:this={panelElement} class="flex h-full flex-col bg-background">
 	{#if currentView === 'history'}
 		<!-- History View -->
 		<div class="flex items-center justify-between border-b border-border px-4 py-3">
