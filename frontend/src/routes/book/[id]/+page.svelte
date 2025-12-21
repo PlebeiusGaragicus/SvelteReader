@@ -23,6 +23,8 @@
 	import type { PassageContext } from '$lib/types/chat';
 	import { cyphertap } from 'cyphertap';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
+	import { syncStore } from '$lib/stores/sync.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { getThreads } from '$lib/services/langgraph';
 
 	const bookId = $derived($page.params.id);
@@ -76,6 +78,28 @@
 			isLoggedIn: cyphertap.isLoggedIn,
 			npub: cyphertap.npub
 		});
+	});
+
+	// Set CypherTap instance for annotation Nostr publishing and sync
+	$effect(() => {
+		if (cyphertap.isLoggedIn) {
+			annotations.setCyphertap(cyphertap);
+			syncStore.setCyphertap(cyphertap);
+			syncStore.setMergeCallback(annotations.mergeFromNostr);
+		} else {
+			annotations.setCyphertap(null);
+			syncStore.setCyphertap(null);
+		}
+	});
+
+	// Auto-sync on login if auto-publish is enabled
+	let hasSyncedOnLogin = $state(false);
+	$effect(() => {
+		if (cyphertap.isLoggedIn && settingsStore.autoPublishAnnotations && !hasSyncedOnLogin && isBookReady) {
+			hasSyncedOnLogin = true;
+			console.log('[Reader] Auto-syncing annotations on login...');
+			syncStore.sync();
+		}
 	});
 
 	// Payment generator for chat messages

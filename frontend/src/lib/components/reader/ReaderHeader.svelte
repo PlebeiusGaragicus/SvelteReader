@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ArrowLeft, List, Highlighter, Bot, Settings } from '@lucide/svelte';
+	import SyncStatusButton from './SyncStatusButton.svelte';
 
 	interface Props {
 		title: string;
@@ -62,6 +63,7 @@
 		>
 			<Bot class="h-5 w-5" />
 		</button>
+		<SyncStatusButton />
 		<button
 			onclick={onToggleSettings}
 			class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent {showSettings ? 'bg-accent' : ''}"
