@@ -38,8 +38,6 @@ export interface SpectateHistoryEntry {
 let isSpectating = $state(false);
 let target = $state<SpectateTarget | null>(null);
 let history = $state<SpectateHistoryEntry[]>([]);
-let isSyncing = $state(false);
-let syncError = $state<string | null>(null);
 
 // LocalStorage key for persisting spectate state
 const STORAGE_KEY = 'sveltereader-spectate';
@@ -101,7 +99,6 @@ function startSpectating(pubkey: string, npub: string, relays: string[]): void {
 		lastSynced: undefined
 	};
 	isSpectating = true;
-	syncError = null;
 	persistState();
 	
 	// Add to history (or update existing entry)
@@ -126,23 +123,28 @@ function addToHistory(entry: Omit<SpectateHistoryEntry, 'lastSynced'>): void {
 	persistHistory();
 }
 
-// Update relays for a history entry
-function updateHistoryRelays(pubkey: string, relays: string[]): void {
+// Helper: Update a history entry by pubkey
+function updateHistoryEntry(pubkey: string, updates: Partial<SpectateHistoryEntry>): void {
 	const index = history.findIndex(h => h.pubkey === pubkey);
 	if (index >= 0) {
 		history = [
 			...history.slice(0, index),
-			{ ...history[index], relays },
+			{ ...history[index], ...updates },
 			...history.slice(index + 1)
 		];
 		persistHistory();
 		
 		// Also update current target if it matches
 		if (target?.pubkey === pubkey) {
-			target = { ...target, relays };
+			target = { ...target, ...updates };
 			persistState();
 		}
 	}
+}
+
+// Update relays for a history entry
+function updateHistoryRelays(pubkey: string, relays: string[]): void {
+	updateHistoryEntry(pubkey, { relays });
 }
 
 // Remove an entry from history
@@ -156,7 +158,6 @@ function stopSpectating(): void {
 	console.log('[Spectate] Stopping spectate mode');
 	isSpectating = false;
 	target = null;
-	syncError = null;
 	persistState();
 }
 
@@ -176,16 +177,6 @@ function setLastSynced(timestamp: number): void {
 	}
 }
 
-// Set syncing state
-function setSyncing(syncing: boolean): void {
-	isSyncing = syncing;
-}
-
-// Set sync error
-function setSyncError(error: string | null): void {
-	syncError = error;
-}
-
 // Get the pubkey to use for data queries (spectate target or null)
 function getActivePubkey(): string | null {
 	return isSpectating && target ? target.pubkey : null;
@@ -196,30 +187,14 @@ if (browser) {
 	loadPersistedState();
 }
 
-// Update profile in history when we get it
+// Update profile in history
 function updateHistoryProfile(pubkey: string, profile: NostrProfile): void {
-	const index = history.findIndex(h => h.pubkey === pubkey);
-	if (index >= 0) {
-		history = [
-			...history.slice(0, index),
-			{ ...history[index], profile },
-			...history.slice(index + 1)
-		];
-		persistHistory();
-	}
+	updateHistoryEntry(pubkey, { profile });
 }
 
 // Update lastSynced in history
 function updateHistoryLastSynced(pubkey: string, lastSynced: number): void {
-	const index = history.findIndex(h => h.pubkey === pubkey);
-	if (index >= 0) {
-		history = [
-			...history.slice(0, index),
-			{ ...history[index], lastSynced },
-			...history.slice(index + 1)
-		];
-		persistHistory();
-	}
+	updateHistoryEntry(pubkey, { lastSynced });
 }
 
 // Export reactive getters and actions
@@ -227,8 +202,6 @@ export const spectateStore = {
 	get isSpectating() { return isSpectating; },
 	get target() { return target; },
 	get history() { return history; },
-	get isSyncing() { return isSyncing; },
-	get syncError() { return syncError; },
 	
 	startSpectating,
 	stopSpectating,
@@ -239,7 +212,5 @@ export const spectateStore = {
 	updateHistoryProfile,
 	updateHistoryLastSynced,
 	removeFromHistory,
-	setSyncing,
-	setSyncError,
 	getActivePubkey
 };
