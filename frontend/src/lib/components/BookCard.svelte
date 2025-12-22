@@ -143,7 +143,7 @@
 
 <a
 	href="/book/{book.id}"
-	class="book-card group relative cursor-pointer rounded-lg border border-border bg-card transition-shadow hover:shadow-lg"
+	class="book-card group relative cursor-pointer overflow-visible rounded-lg border border-border bg-card transition-shadow hover:shadow-lg"
 >
 	<div class="relative aspect-[2/3] overflow-hidden rounded-t-lg bg-muted">
 		{#if coverUrl}
@@ -172,26 +172,27 @@
 				></div>
 			</div>
 		{/if}
+	</div>
 
-		<!-- Context Menu Button -->
-		<div 
-			bind:this={menuElement}
-			class="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100"
+	<!-- Context Menu Button - outside overflow container -->
+	<div 
+		bind:this={menuElement}
+		class="absolute right-2 top-2 z-20 opacity-0 transition-opacity group-hover:opacity-100"
+	>
+		<button
+			onclick={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				menuOpen = !menuOpen;
+			}}
+			class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/80 backdrop-blur hover:bg-background"
+			aria-label="Book options"
 		>
-			<button
-				onclick={(e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					menuOpen = !menuOpen;
-				}}
-				class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/80 backdrop-blur hover:bg-background"
-				aria-label="Book options"
-			>
-				<MoreVertical class="h-4 w-4" />
-			</button>
+			<MoreVertical class="h-4 w-4" />
+		</button>
 
-			{#if menuOpen}
-				<div class="absolute right-0 top-full z-10 mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-lg">
+		{#if menuOpen}
+			<div class="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-lg">
 					{#if !book.hasEpubData}
 						<!-- Ghost book: show Upload EPUB option -->
 						<button
@@ -209,12 +210,6 @@
 						<Pencil class="h-4 w-4" />
 						Edit Metadata
 					</button>
-					{#if book.isPublic}
-						<div class="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
-							<Globe class="h-3 w-3 text-green-500" />
-							Published
-						</div>
-					{/if}
 					<div class="my-1 border-t border-border"></div>
 					<button
 						onclick={openDeleteModal}
@@ -224,16 +219,18 @@
 						Delete...
 					</button>
 				</div>
-			{/if}
-		</div>
+		{/if}
 	</div>
 
 	<div class="p-2">
 		<h3 class="mb-0.5 line-clamp-2 text-xs font-semibold">{book.title}</h3>
 		<p class="line-clamp-1 text-xs text-muted-foreground">{book.author}</p>
-		{#if book.progress > 0}
-			<p class="mt-1 text-xs text-muted-foreground">{Math.round(book.progress)}%</p>
-		{/if}
+		<div class="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+			<span>{book.progress > 0 ? `${Math.round(book.progress)}%` : ''}</span>
+			{#if book.isPublic}
+				<Globe class="h-3 w-3 text-green-500" />
+			{/if}
+		</div>
 	</div>
 </a>
 
@@ -268,7 +265,6 @@
 <BookAnnouncementModal
 	book={book}
 	isOpen={showEditModal}
-	isEdit={true}
 	onClose={() => showEditModal = false}
 	onSave={handleEditSave}
 />

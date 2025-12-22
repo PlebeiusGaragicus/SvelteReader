@@ -4,14 +4,13 @@
 	import type { BookIdentity } from '$lib/types';
 
 	interface Props {
-		book: BookIdentity & { id?: string };
+		book: BookIdentity & { id?: string; isPublic?: boolean };
 		isOpen: boolean;
-		isEdit?: boolean;
 		onClose: () => void;
 		onSave: (book: BookIdentity, isPublic: boolean) => Promise<void>;
 	}
 
-	let { book, isOpen, isEdit = false, onClose, onSave }: Props = $props();
+	let { book, isOpen, onClose, onSave }: Props = $props();
 
 	// Editable form state
 	let title = $state(book.title);
@@ -19,9 +18,12 @@
 	let year = $state(book.year?.toString() || '');
 	let isbn = $state(book.isbn || '');
 	let coverBase64 = $state(book.coverBase64 || '');
-	let isPublic = $state(true);
+	let isPublic = $state(book.isPublic ?? true);
 	let isSaving = $state(false);
 	let error = $state<string | null>(null);
+	
+	// Determine if editing existing book (has id) vs new book
+	const isEdit = $derived(!!book.id);
 
 	// Cover image preview
 	const coverUrl = $derived(
@@ -35,6 +37,7 @@
 		year = book.year?.toString() || '';
 		isbn = book.isbn || '';
 		coverBase64 = book.coverBase64 || '';
+		isPublic = book.isPublic ?? true;
 	});
 
 	async function handleCoverUpload(event: Event) {
@@ -123,18 +126,11 @@
 		}
 	}
 
-	function handleBackdropClick(e: MouseEvent) {
-		if (e.target === e.currentTarget) {
-			onClose();
-		}
-	}
-</script>
+	</script>
 
 {#if isOpen}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-		onclick={handleBackdropClick}
 	>
 		<div class="w-full max-w-md rounded-lg border border-border bg-background shadow-xl">
 			<!-- Header -->
@@ -153,11 +149,10 @@
 
 			<!-- Content -->
 			<div class="p-4 space-y-4">
-				<!-- Cover and basic info -->
+				<!-- Cover image with hover upload -->
 				<div class="flex gap-4">
-					<!-- Cover image -->
-					<div class="flex-shrink-0">
-						<div class="relative h-32 w-[85px] overflow-hidden rounded-md border border-border bg-muted">
+					<label class="group relative flex-shrink-0 cursor-pointer">
+						<div class="relative h-36 w-24 overflow-hidden rounded-md border border-border bg-muted">
 							{#if coverUrl}
 								<img src={coverUrl} alt="Cover" class="h-full w-full object-cover" />
 							{:else}
@@ -165,19 +160,23 @@
 									<Upload class="h-6 w-6" />
 								</div>
 							{/if}
+							<!-- Hover overlay -->
+							<div class="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 transition-opacity group-hover:opacity-100">
+								<div class="text-center text-white">
+									<Upload class="mx-auto h-5 w-5 mb-1" />
+									<span class="text-xs">Upload Image</span>
+								</div>
+							</div>
 						</div>
-						<label class="mt-2 block">
-							<span class="sr-only">Upload cover</span>
-							<input
-								type="file"
-								accept="image/*"
-								onchange={handleCoverUpload}
-								class="block w-full text-xs text-muted-foreground file:mr-2 file:rounded file:border-0 file:bg-primary file:px-2 file:py-1 file:text-xs file:text-primary-foreground hover:file:bg-primary/90"
-							/>
-						</label>
-					</div>
+						<input
+							type="file"
+							accept="image/*"
+							onchange={handleCoverUpload}
+							class="hidden"
+						/>
+					</label>
 
-					<!-- Title and Author -->
+					<!-- Title and Author - stacked on right -->
 					<div class="flex-1 space-y-3">
 						<div>
 							<label for="title" class="block text-sm font-medium mb-1">Title</label>
@@ -211,7 +210,7 @@
 							type="text"
 							bind:value={year}
 							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-							placeholder="1925"
+							placeholder=""
 						/>
 					</div>
 					<div>
@@ -221,14 +220,13 @@
 							type="text"
 							bind:value={isbn}
 							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-							placeholder="978-0-123456-78-9"
+							placeholder=""
 						/>
 					</div>
 				</div>
 
 				<!-- Publish options -->
-				{#if !isEdit}
-					<div class="space-y-2 pt-2">
+				<div class="space-y-2 pt-2">
 						<p class="text-sm font-medium">Sync Options</p>
 						<label class="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/50 {isPublic ? 'border-primary bg-primary/5' : ''}">
 							<input
@@ -266,8 +264,7 @@
 								</p>
 							</div>
 						</label>
-					</div>
-				{/if}
+				</div>
 
 				<!-- Error message -->
 				{#if error}
@@ -295,7 +292,7 @@
 						<Loader2 class="h-4 w-4 animate-spin" />
 						Saving...
 					{:else}
-						{isEdit ? 'Save Changes' : (isPublic ? 'Publish' : 'Save Locally')}
+						{isPublic ? 'Save & Publish' : 'Save Locally'}
 					{/if}
 				</button>
 			</div>

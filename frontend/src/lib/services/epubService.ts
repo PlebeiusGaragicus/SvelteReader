@@ -625,6 +625,14 @@ class EpubService {
 	loadAnnotations(annotations: AnnotationLocal[]): void {
 		if (!this.rendition) return;
 		
+		// Clear existing highlights that are no longer in the new annotations list
+		const newCfiRanges = new Set(annotations.map(a => a.cfiRange));
+		this.loadedAnnotations.forEach((existing) => {
+			if (!newCfiRanges.has(existing.cfiRange)) {
+				this.rendition?.annotations.remove(existing.cfiRange, 'highlight');
+			}
+		});
+		
 		// Store annotations for re-injection on page changes
 		this.loadedAnnotations = annotations;
 		
@@ -633,6 +641,7 @@ class EpubService {
 			this.reinjectAllHighlightStyles();
 		});
 		
+		// Add new annotations (addHighlight checks for duplicates)
 		annotations.forEach((annotation) => {
 			this.addHighlight(annotation);
 		});

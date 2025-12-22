@@ -23,10 +23,9 @@ export interface BookLocal {
 	totalPages: number;
 	currentCfi?: string;
 	hasEpubData: boolean;        // false = "ghost book" (annotations only)
-	defaultPublishAnnotations?: boolean;
 	
 	// Nostr sync state
-	isPublic?: boolean;          // Published to Nostr
+	isPublic?: boolean;          // true = sync book & annotations to Nostr
 	nostrEventId?: string;       // Book announcement event ID
 	nostrCreatedAt?: number;     // Event created_at for LWW
 	relays?: string[];           // Relay URLs where published

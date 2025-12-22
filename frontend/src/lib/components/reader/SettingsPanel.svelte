@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { X, Cloud, CloudOff } from '@lucide/svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { X, Info } from '@lucide/svelte';
 
 	interface Props {
 		onClose: () => void;
@@ -9,15 +8,6 @@
 
 	let { onClose }: Props = $props();
 	let panelElement: HTMLDivElement;
-	
-	// Local state bound to settings store
-	let autoPublish = $state(settingsStore.autoPublishAnnotations);
-	
-	function handleAutoPublishChange(e: Event) {
-		const checked = (e.target as HTMLInputElement).checked;
-		autoPublish = checked;
-		settingsStore.setAutoPublishAnnotations(checked);
-	}
 
 	// Click outside to close
 	function handleClickOutside(event: MouseEvent) {
@@ -50,31 +40,19 @@
 		</button>
 	</div>
 	<div class="p-4 space-y-6">
-		<!-- Nostr Sync Settings -->
+		<!-- Nostr Sync Info -->
 		<div class="space-y-3">
 			<h3 class="text-sm font-medium flex items-center gap-2">
-				{#if autoPublish}
-					<Cloud class="h-4 w-4 text-blue-500" />
-				{:else}
-					<CloudOff class="h-4 w-4 text-muted-foreground" />
-				{/if}
+				<Info class="h-4 w-4 text-blue-500" />
 				Nostr Sync
 			</h3>
 			
-			<label class="flex items-center justify-between cursor-pointer">
-				<div class="space-y-0.5">
-					<span class="text-sm">Auto-publish annotations</span>
-					<p class="text-xs text-muted-foreground">
-						Sync highlights and notes to Nostr relays
-					</p>
-				</div>
-				<input
-					type="checkbox"
-					checked={autoPublish}
-					onchange={handleAutoPublishChange}
-					class="h-4 w-4 rounded border-border text-primary focus:ring-primary"
-				/>
-			</label>
+			<p class="text-xs text-muted-foreground">
+				Annotation syncing is controlled per-book. When importing a book, choose "Publish to Nostr" to sync annotations, or "Local Only" to keep them private.
+			</p>
+			<p class="text-xs text-muted-foreground">
+				You can change a book's sync setting via the book card menu → "Edit Metadata".
+			</p>
 		</div>
 
 		<hr class="border-border" />

@@ -5,7 +5,8 @@ import {
 	getAnnotationsByBook,
 	getAllAnnotations,
 	deleteAnnotation as deleteAnnotationFromDB,
-	deleteAnnotationsByBook
+	deleteAnnotationsByBook,
+	getBookBySha256
 } from '$lib/services/storageService';
 import {
 	publishAnnotation,
@@ -13,7 +14,6 @@ import {
 	type CyphertapPublisher
 } from '$lib/services/nostrService';
 import type { Annotation } from '$lib/types';
-import { settingsStore } from '$lib/stores/settings.svelte';
 import {
 	type AnnotationLocal,
 	type AnnotationColor,
@@ -96,9 +96,10 @@ async function upsertAnnotation(
 	// Persist to IndexedDB
 	await storeAnnotation(annotation);
 	
-	// Auto-publish to Nostr if enabled and logged in
-	if (settingsStore.autoPublishAnnotations && cyphertapInstance?.isLoggedIn) {
-		console.log(`[Annotations] Auto-publishing annotation: ${key.slice(0, 30)}...`);
+	// Auto-publish to Nostr if book is public and logged in
+	const book = await getBookBySha256(bookSha256);
+	if (book?.isPublic && cyphertapInstance?.isLoggedIn) {
+		console.log(`[Annotations] Auto-publishing annotation for public book: ${key.slice(0, 30)}...`);
 		const result = await publishAnnotation(annotation, cyphertapInstance);
 		if (result.success) {
 			// Update annotation with Nostr sync state
@@ -118,8 +119,8 @@ async function upsertAnnotation(
 			await storeAnnotation(annotation);
 			console.warn('[Annotations] ✗ Failed to publish annotation to Nostr:', result.error);
 		}
-	} else if (!settingsStore.autoPublishAnnotations) {
-		console.log(`[Annotations] Auto-publish disabled, skipping Nostr sync`);
+	} else if (!book?.isPublic) {
+		console.log(`[Annotations] Book is local-only, skipping Nostr sync`);
 	}
 	
 	// Update in-memory store

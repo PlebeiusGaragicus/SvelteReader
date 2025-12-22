@@ -25,12 +25,8 @@
 		fileInput?.click();
 	}
 
-	async function handleFileSelect(event: Event) {
-		const input = event.target as HTMLInputElement;
-		const file = input.files?.[0];
-
-		if (!file) return;
-
+	// Process a file (can be called externally for drag-and-drop)
+	export async function processFile(file: File): Promise<void> {
 		if (!file.name.toLowerCase().endsWith('.epub')) {
 			toast.error('Please select an EPUB file');
 			return;
@@ -83,9 +79,18 @@
 			}
 		} finally {
 			isImporting = false;
-			// Reset input so same file can be selected again
-			input.value = '';
 		}
+	}
+
+	async function handleFileSelect(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+
+		if (!file) return;
+
+		await processFile(file);
+		// Reset input so same file can be selected again
+		input.value = '';
 	}
 
 	async function handleAnnouncementSave(updatedBook: BookIdentity, isPublic: boolean) {
