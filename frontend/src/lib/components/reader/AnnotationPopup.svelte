@@ -23,6 +23,8 @@
 		onDelete?: () => void | Promise<void>;
 		onClose: () => void;
 		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string; annotationKey?: string }) => void;
+		// Read-only mode (spectate)
+		readOnly?: boolean;
 	}
 
 	let { 
@@ -33,7 +35,8 @@
 		onSave, 
 		onDelete, 
 		onClose,
-		onOpenAIChat 
+		onOpenAIChat,
+		readOnly = false
 	}: Props = $props();
 
 	let popupElement: HTMLDivElement;
@@ -240,60 +243,88 @@
 	class="annotation-popup no-select fixed z-50 flex flex-col rounded-lg border border-border bg-popover text-popover-foreground shadow-xl animate-in fade-in-0 zoom-in-95 duration-150"
 	style="left: {adjustedPosition().x}px; top: {adjustedPosition().y}px; transform: translateX(-50%); background-color: var(--popover); color: var(--popover-foreground);"
 	role="dialog"
-	aria-label={isEditing ? "Edit annotation" : "Text selection options"}
+	aria-label={readOnly ? "View annotation" : (isEditing ? "Edit annotation" : "Text selection options")}
 >
-	<!-- Main toolbar -->
-	<div class="flex items-center gap-1 p-2">
-		<!-- Highlight colors -->
-		<div class="flex items-center gap-1 border-r border-border pr-2">
-			{#each colors as { color, bg, ring }}
-				{@const isSelected = selectedColor === color && (isEditing ? hasHighlight : showNoteInput)}
-				{@const isCurrentColor = isEditing && currentHighlightColor === color}
-				<button
-					onclick={() => handleColorClick(color)}
-					class="relative h-6 w-6 rounded-full transition-transform hover:scale-110 {bg} {isSelected || isCurrentColor ? `ring-2 ${ring}` : ''}"
-					aria-label={isCurrentColor ? "Remove highlight" : `Highlight ${color}`}
-					title={isCurrentColor ? "Remove highlight" : `Highlight ${color}`}
-				>
-					{#if isCurrentColor}
-						<span class="absolute inset-0 flex items-center justify-center text-xs font-bold text-gray-700">✕</span>
-					{/if}
-				</button>
-			{/each}
-		</div>
-
-		<!-- Note button -->
-		<button
-			onclick={toggleNoteInput}
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent {showNoteInput || hasNote ? 'bg-accent text-green-600' : ''}"
-			aria-label={hasNote ? 'Edit note' : 'Add note'}
-			title={hasNote ? 'Edit note' : 'Add note'}
-		>
-			<MessageSquare class="h-4 w-4" />
-		</button>
-
-		<!-- AI Chat button - highlighted if annotation has chat thread -->
-		<button
-			onclick={handleAIChat}
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 {hasChat ? 'bg-blue-500/10 text-blue-600' : 'text-blue-500'}"
-			aria-label={hasChat ? 'Continue AI Chat' : 'AI Chat'}
-			title={hasChat ? 'Continue AI Chat' : 'AI Chat with this context'}
-		>
-			<Bot class="h-4 w-4" />
-		</button>
-
-		<!-- Delete button (only for existing annotations) -->
-		{#if isEditing}
+	{#if readOnly}
+		<!-- Read-only view for spectate mode -->
+		<div class="p-3 max-w-xs">
+			<p class="text-xs text-muted-foreground mb-2">Viewing annotation</p>
+			{#if hasHighlight}
+				<div class="flex items-center gap-2 mb-2">
+					<span class="text-xs text-muted-foreground">Highlight:</span>
+					<span class="h-4 w-4 rounded-full {colors.find(c => c.color === currentHighlightColor)?.bg || 'bg-yellow-300'}"></span>
+				</div>
+			{/if}
+			{#if hasNote}
+				<div class="mb-2">
+					<span class="text-xs text-muted-foreground">Note:</span>
+					<p class="text-sm mt-1 p-2 bg-green-500/10 rounded border border-green-500/20">{annotation?.note}</p>
+				</div>
+			{/if}
+			{#if hasChat}
+				<p class="text-xs text-blue-400">Has AI chat thread</p>
+			{/if}
 			<button
-				onclick={() => showDeleteConfirm = true}
-				class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 text-destructive"
-				aria-label="Delete annotation"
-				title="Delete annotation"
+				onclick={onClose}
+				class="mt-2 w-full rounded-md bg-secondary px-3 py-1.5 text-sm hover:bg-secondary/80"
 			>
-				<Trash2 class="h-4 w-4" />
+				Close
 			</button>
-		{/if}
-	</div>
+		</div>
+	{:else}
+		<!-- Main toolbar (editing mode) -->
+		<div class="flex items-center gap-1 p-2">
+			<!-- Highlight colors -->
+			<div class="flex items-center gap-1 border-r border-border pr-2">
+				{#each colors as { color, bg, ring }}
+					{@const isSelected = selectedColor === color && (isEditing ? hasHighlight : showNoteInput)}
+					{@const isCurrentColor = isEditing && currentHighlightColor === color}
+					<button
+						onclick={() => handleColorClick(color)}
+						class="relative h-6 w-6 rounded-full transition-transform hover:scale-110 {bg} {isSelected || isCurrentColor ? `ring-2 ${ring}` : ''}"
+						aria-label={isCurrentColor ? "Remove highlight" : `Highlight ${color}`}
+						title={isCurrentColor ? "Remove highlight" : `Highlight ${color}`}
+					>
+						{#if isCurrentColor}
+							<span class="absolute inset-0 flex items-center justify-center text-xs font-bold text-gray-700">✕</span>
+						{/if}
+					</button>
+				{/each}
+			</div>
+
+			<!-- Note button -->
+			<button
+				onclick={toggleNoteInput}
+				class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-accent {showNoteInput || hasNote ? 'bg-accent text-green-600' : ''}"
+				aria-label={hasNote ? 'Edit note' : 'Add note'}
+				title={hasNote ? 'Edit note' : 'Add note'}
+			>
+				<MessageSquare class="h-4 w-4" />
+			</button>
+
+			<!-- AI Chat button - highlighted if annotation has chat thread -->
+			<button
+				onclick={handleAIChat}
+				class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-blue-500/10 {hasChat ? 'bg-blue-500/10 text-blue-600' : 'text-blue-500'}"
+				aria-label={hasChat ? 'Continue AI Chat' : 'AI Chat'}
+				title={hasChat ? 'Continue AI Chat' : 'AI Chat with this context'}
+			>
+				<Bot class="h-4 w-4" />
+			</button>
+
+			<!-- Delete button (only for existing annotations) -->
+			{#if isEditing}
+				<button
+					onclick={() => showDeleteConfirm = true}
+					class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-destructive/10 text-destructive"
+					aria-label="Delete annotation"
+					title="Delete annotation"
+				>
+					<Trash2 class="h-4 w-4" />
+				</button>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Note input area -->
 	{#if showNoteInput}

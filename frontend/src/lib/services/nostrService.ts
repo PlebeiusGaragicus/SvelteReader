@@ -463,3 +463,161 @@ export async function fetchBooks(
 		}, timeoutMs);
 	});
 }
+
+// =============================================================================
+// SPECTATE MODE - Fetch remote user's data from specified relays
+// =============================================================================
+
+export interface NostrProfile {
+	name?: string;
+	displayName?: string;
+	picture?: string;
+	about?: string;
+	nip05?: string;
+}
+
+export interface FetchRemoteUserResult {
+	success: boolean;
+	error?: string;
+	profile?: NostrProfile;
+	books: Array<BookIdentity & { nostrEventId?: string; nostrCreatedAt?: number }>;
+	annotations: Annotation[];
+}
+
+/**
+ * Fetch a remote user's profile, books, and annotations from specified relays
+ * This is used for "spectate mode" to view another user's library
+ */
+export async function fetchRemoteUserData(
+	pubkey: string,
+	relays: string[],
+	timeoutMs: number = 15000
+): Promise<FetchRemoteUserResult> {
+	console.log(`[Nostr] Fetching remote user data for ${pubkey.slice(0, 8)}...`);
+	console.log(`[Nostr]   Relays: ${relays.join(', ')}`);
+
+	const result: FetchRemoteUserResult = {
+		success: false,
+		books: [],
+		annotations: [],
+	};
+
+	try {
+		// Create WebSocket connections to relays
+		const sockets: WebSocket[] = [];
+		const events = new Map<string, { kind: number; event: SignedNostrEvent }>();
+
+		// Connect to each relay
+		for (const relayUrl of relays) {
+			try {
+				const ws = new WebSocket(relayUrl);
+				sockets.push(ws);
+
+				ws.onopen = () => {
+					console.log(`[Nostr] Connected to ${relayUrl}`);
+					
+					// Subscribe to kind 0 (profile), 30800 (annotations), 30801 (books)
+					const subId = `spectate-${Date.now()}`;
+					const req = JSON.stringify([
+						'REQ',
+						subId,
+						{
+							kinds: [0, ANNOTATION_EVENT_KIND, BOOK_EVENT_KIND],
+							authors: [pubkey],
+						}
+					]);
+					ws.send(req);
+				};
+
+				ws.onmessage = (msg) => {
+					try {
+						const data = JSON.parse(msg.data);
+						if (data[0] === 'EVENT') {
+							const event = data[2] as SignedNostrEvent;
+							
+							if (event.kind === 0) {
+								// Profile event - parse content
+								try {
+									const profile = JSON.parse(event.content);
+									result.profile = {
+										name: profile.name,
+										displayName: profile.display_name || profile.displayName,
+										picture: profile.picture,
+										about: profile.about,
+										nip05: profile.nip05,
+									};
+								} catch (e) {
+									console.warn('[Nostr] Failed to parse profile:', e);
+								}
+							} else {
+								// Book or annotation event - dedupe by d-tag
+								const dTag = event.tags?.find(t => t[0] === 'd')?.[1];
+								const key = dTag ? `${event.kind}:${dTag}` : event.id;
+								const existing = events.get(key);
+								
+								if (!existing || event.created_at > existing.event.created_at) {
+									events.set(key, { kind: event.kind, event });
+								}
+							}
+						}
+					} catch (e) {
+						// Ignore parse errors
+					}
+				};
+
+				ws.onerror = (e) => {
+					console.warn(`[Nostr] WebSocket error for ${relayUrl}:`, e);
+				};
+			} catch (e) {
+				console.warn(`[Nostr] Failed to connect to ${relayUrl}:`, e);
+			}
+		}
+
+		// Wait for responses
+		await new Promise(resolve => setTimeout(resolve, timeoutMs));
+
+		// Close all connections
+		for (const ws of sockets) {
+			try {
+				ws.close();
+			} catch (e) {
+				// Ignore close errors
+			}
+		}
+
+		// Process collected events
+		for (const [key, { kind, event }] of events) {
+			if (kind === BOOK_EVENT_KIND) {
+				const book = eventToBook(event);
+				if (book) {
+					const syncMeta = extractBookSyncMetadata(event);
+					result.books.push({
+						...book,
+						...syncMeta,
+					});
+				}
+			} else if (kind === ANNOTATION_EVENT_KIND) {
+				const annotation = eventToAnnotation(event);
+				if (annotation) {
+					result.annotations.push({
+						...annotation,
+						ownerPubkey: pubkey,
+					});
+				}
+			}
+		}
+
+		console.log(`[Nostr] ✓ Remote user fetch complete!`);
+		console.log(`[Nostr]   Profile: ${result.profile?.name || 'not found'}`);
+		console.log(`[Nostr]   Books: ${result.books.length}`);
+		console.log(`[Nostr]   Annotations: ${result.annotations.length}`);
+
+		result.success = true;
+		return result;
+
+	} catch (e) {
+		console.error('[Nostr] Failed to fetch remote user data:', e);
+		result.error = e instanceof Error ? e.message : 'Unknown error';
+		return result;
+	}
+}

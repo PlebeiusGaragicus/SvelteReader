@@ -5,11 +5,12 @@
 	import { mode } from 'mode-watcher';
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
+	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { getEpubData } from '$lib/services/storageService';
 	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
 	import type { TocItem, LocationInfo, AnnotationColor, AnnotationLocal, AnnotationDisplay } from '$lib/types';
 	import { AppError, ERROR_MESSAGES, getAnnotationKey } from '$lib/types';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader2, Binoculars } from '@lucide/svelte';
 	import {
 		ReaderHeader,
 		ReaderControls,
@@ -25,6 +26,9 @@
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { getThreads } from '$lib/services/langgraph';
+	
+	// Check if we're in spectate mode (view-only)
+	const isSpectating = $derived(spectateStore.isSpectating);
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
@@ -194,8 +198,10 @@
 		setReadingMode(true);
 
 		// Ensure stores are initialized before checking for book
-		// Use cyphertap pubkey if logged in
-		const userPubkey = cyphertap.isLoggedIn ? cyphertap.getUserHex() : undefined;
+		// Priority: spectate target > logged-in user > none
+		const userPubkey = spectateStore.isSpectating && spectateStore.target
+			? spectateStore.target.pubkey
+			: (cyphertap.isLoggedIn ? cyphertap.getUserHex() : undefined);
 		await books.initialize(userPubkey || undefined);
 		await annotations.initialize(userPubkey || undefined);
 
@@ -268,8 +274,13 @@
 			// Get initial location
 			currentLocation = epubService.getCurrentLocation();
 
-			// Handle text selection
+			// Handle text selection (disabled in spectate mode)
 			epubService.onTextSelected((selection) => {
+				if (isSpectating) {
+					// In spectate mode, don't show annotation popup for new selections
+					textSelection = null;
+					return;
+				}
 				textSelection = selection;
 				// Close edit popup when making new selection
 				if (selection) {
@@ -277,7 +288,7 @@
 				}
 			});
 
-			// Handle highlight clicks for editing
+			// Handle highlight clicks for viewing/editing
 			epubService.onHighlightClicked((event) => {
 				if (event) {
 					editingAnnotation = event;
@@ -697,6 +708,7 @@
 				onDelete={handleAnnotationDelete}
 				onClose={handlePopupClose}
 				onOpenAIChat={handleOpenAIChat}
+				readOnly={isSpectating}
 			/>
 		{/if}
 
