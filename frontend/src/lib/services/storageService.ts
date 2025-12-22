@@ -375,6 +375,47 @@ export async function deleteAnnotationsByBook(bookSha256: string): Promise<void>
 	}
 }
 
+/**
+ * Delete all books and annotations for a specific owner (used for spectate cleanup)
+ */
+export async function deleteDataByOwner(ownerPubkey: string): Promise<void> {
+	if (!browser) return;
+
+	try {
+		const db = await getDB();
+		
+		// Delete all books for this owner
+		const booksToDelete = await db.getAllFromIndex('books', 'by-owner', ownerPubkey);
+		if (booksToDelete.length > 0) {
+			const bookTx = db.transaction('books', 'readwrite');
+			for (const book of booksToDelete) {
+				await bookTx.store.delete(book.id);
+			}
+			await bookTx.done;
+			console.log(`[Storage] Deleted ${booksToDelete.length} books for owner ${ownerPubkey.slice(0, 8)}`);
+		}
+		
+		// Delete all annotations for this owner
+		const annotationsToDelete = await db.getAllFromIndex('annotations', 'by-owner', ownerPubkey);
+		if (annotationsToDelete.length > 0) {
+			const annotationTx = db.transaction('annotations', 'readwrite');
+			for (const annotation of annotationsToDelete) {
+				const key = getAnnotationKey(annotation.bookSha256, annotation.cfiRange);
+				await annotationTx.store.delete(key);
+			}
+			await annotationTx.done;
+			console.log(`[Storage] Deleted ${annotationsToDelete.length} annotations for owner ${ownerPubkey.slice(0, 8)}`);
+		}
+	} catch (e) {
+		console.error('Failed to delete data by owner:', e);
+		throw new AppError(
+			'Failed to delete user data.',
+			'STORAGE_WRITE_FAILED',
+			true
+		);
+	}
+}
+
 // =============================================================================
 // SHA-256 COMPUTATION
 // =============================================================================

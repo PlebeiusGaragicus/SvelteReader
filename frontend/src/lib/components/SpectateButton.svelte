@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { Eye, X, RefreshCw, Trash2, Settings, History, ChevronLeft } from '@lucide/svelte';
+	import { get } from 'svelte/store';
 	import { spectateStore, type SpectateHistoryEntry } from '$lib/stores/spectate.svelte';
 	import { fetchRemoteUserData } from '$lib/services/nostrService';
+	import { deleteDataByOwner } from '$lib/services/storageService';
 	import { getDefaultRelays } from '$lib/types/nostr';
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
@@ -40,70 +42,20 @@
 		}
 	}
 	
-	// Quick spectate from history
+	// Quick spectate from history - loads local data, no fetch
 	async function spectateFromHistory(entry: SpectateHistoryEntry) {
-		isLoading = true;
-		inputError = null;
-		
-		try {
-			const result = await fetchRemoteUserData(entry.pubkey, entry.relays);
-			
-			if (!result.success) {
-				inputError = result.error || 'Failed to fetch user data';
-				isLoading = false;
-				return;
-			}
-			
-			spectateStore.startSpectating(entry.pubkey, entry.npub, entry.relays);
-			
-			if (result.profile) {
-				spectateStore.setProfile(result.profile);
-				spectateStore.updateHistoryProfile(entry.pubkey, result.profile);
-			}
-			
-			await books.initialize(entry.pubkey);
-			await annotations.initialize(entry.pubkey);
-			
-			// Only add books that don't already exist (check by sha256)
-			for (const book of result.books) {
-				const existing = books.getBySha256(book.sha256);
-				if (!existing) {
-					await books.add({
-						...book,
-						progress: 0,
-						currentPage: 0,
-						totalPages: 0,
-						hasEpubData: false,
-						isPublic: true,
-						syncPending: false,
-					});
-				}
-			}
-			
-			for (const annotation of result.annotations) {
-				await annotations.upsert(annotation.bookSha256, annotation.cfiRange, {
-					text: annotation.text,
-					highlightColor: annotation.highlightColor,
-					note: annotation.note,
-					nostrEventId: annotation.nostrEventId,
-					nostrCreatedAt: annotation.nostrCreatedAt,
-					isPublic: true,
-					syncPending: false,
-				});
-			}
-			
-			spectateStore.setLastSynced(Date.now());
-			spectateStore.updateHistoryLastSynced(entry.pubkey, Date.now());
-			
-			isLoading = false;
-			showPopover = false;
-			window.location.reload();
-			
-		} catch (e) {
-			inputError = 'Failed to spectate';
-			isLoading = false;
-			console.error('[Spectate] Failed:', e);
+		// Start spectating mode with stored profile from history
+		spectateStore.startSpectating(entry.pubkey, entry.npub, entry.relays);
+		if (entry.profile) {
+			spectateStore.setProfile(entry.profile);
 		}
+		
+		// Initialize stores with the spectate user's pubkey to load local data
+		await books.initialize(entry.pubkey);
+		await annotations.initialize(entry.pubkey);
+		
+		showPopover = false;
+		window.location.reload();
 	}
 	
 	// Open relay editor for a history entry
@@ -166,19 +118,43 @@
 			// Parse relays (comma or newline separated)
 			const relays = relayInput
 				.split(/[,\n]/)
-				.map(r => r.trim())
-				.filter(r => r.startsWith('wss://') || r.startsWith('ws://'));
+				.map((r: string) => r.trim())
+				.filter((r: string) => r.startsWith('wss://') || r.startsWith('ws://'));
 			
 			if (relays.length === 0) {
 				inputError = 'Please enter at least one valid relay URL';
 				return;
 			}
 			
-			// Start loading
+			// Check if we already have local data for this user
+			await books.initialize(hexPubkey);
+			await annotations.initialize(hexPubkey);
+			
+			// Get current books count after initialization
+			const existingBooks = get(books);
+			
+			if (existingBooks.length > 0) {
+				// We have local data - just start spectating without fetching
+				console.log(`[Spectate] Found ${existingBooks.length} local books for ${hexPubkey.slice(0, 8)}, using local data`);
+				
+				// Start spectating mode
+				spectateStore.startSpectating(hexPubkey, trimmedNpub, relays);
+				
+				// Try to get profile from history
+				const historyEntry = spectateStore.history.find((h: SpectateHistoryEntry) => h.pubkey === hexPubkey);
+				if (historyEntry?.profile) {
+					spectateStore.setProfile(historyEntry.profile);
+				}
+				
+				showPopover = false;
+				window.location.reload();
+				return;
+			}
+			
+			// No local data - fetch from relays
 			isLoading = true;
 			inputError = null;
 			
-			// Fetch remote user's data from relays
 			const result = await fetchRemoteUserData(hexPubkey, relays);
 			
 			if (!result.success) {
@@ -319,8 +295,12 @@
 	async function handleClearData() {
 		if (!spectateStore.target) return;
 		
-		// Clear all books and annotations for this spectated user
-		// by resetting the stores (they're filtered by ownerPubkey)
+		const pubkey = spectateStore.target.pubkey;
+		
+		// Delete all books and annotations for this spectated user from IndexedDB
+		await deleteDataByOwner(pubkey);
+		
+		// Reset in-memory stores
 		books.reset();
 		annotations.reset();
 		
@@ -350,7 +330,8 @@
 			bind:this={popoverRef}
 			class="absolute left-0 top-full mt-2 w-80 rounded-lg border border-border bg-popover p-4 shadow-lg z-50"
 		>
-			{#if spectateStore.isSpectating && spectateStore.target}
+			<p class="text-xs text-muted-foreground mb-2">Debug: isSpectating={spectateStore.isSpectating}, view={currentView}</p>
+			{#if spectateStore.isSpectating && spectateStore.target && currentView === 'main'}
 				<!-- Currently spectating -->
 				<div class="space-y-3">
 					<div class="flex items-center justify-between">
@@ -548,15 +529,13 @@
 					<div class="flex items-center justify-between">
 						<h3 class="font-semibold text-sm">View Another Library</h3>
 						<div class="flex items-center gap-1">
-							{#if spectateStore.history.length > 0}
-								<button
-									onclick={() => currentView = 'history'}
-									class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-									title="View history"
-								>
-									<History class="h-4 w-4" />
-								</button>
-							{/if}
+							<button
+								onclick={() => { console.log('[Spectate] History button clicked, history length:', spectateStore.history.length); currentView = 'history'; }}
+								class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
+								title="View history ({spectateStore.history.length})"
+							>
+								<History class="h-4 w-4" />
+							</button>
 							<button
 								onclick={() => showPopover = false}
 								class="text-muted-foreground hover:text-foreground"
