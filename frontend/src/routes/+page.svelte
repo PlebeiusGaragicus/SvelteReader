@@ -55,7 +55,14 @@
 	ondragleave={handleDragLeave}
 	ondrop={handleDrop}
 >
-	{#if $books.length === 0}
+	{#if !cyphertap.isLoggedIn}
+		<div class="flex flex-col items-center justify-center py-20 text-center">
+			<BookOpen class="mb-4 h-20 w-20 text-muted-foreground" />
+			<h2 class="mb-2 text-2xl font-semibold">Welcome to SvelteReader</h2>
+			<p class="mb-6 text-muted-foreground">Log in with Nostr to access your library</p>
+			<p class="text-sm text-muted-foreground">Click the user icon in the top right to log in</p>
+		</div>
+	{:else if $books.length === 0}
 		<div class="flex flex-col items-center justify-center py-20 text-center">
 			<BookOpen class="mb-4 h-20 w-20 text-muted-foreground" />
 			<h2 class="mb-2 text-2xl font-semibold">No books yet</h2>

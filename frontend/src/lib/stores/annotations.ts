@@ -27,6 +27,7 @@ const { subscribe, set, update } = writable<AnnotationLocal[]>([]);
 
 // Track if store has been initialized from IndexedDB
 let initialized = false;
+let currentOwnerPubkey: string | null = null;
 
 // CypherTap instance for Nostr publishing
 let cyphertapInstance: CyphertapPublisher | null = null;
@@ -37,13 +38,24 @@ function setCyphertap(cyphertap: CyphertapPublisher | null): void {
 	cyphertapInstance = cyphertap;
 }
 
-// Initialize store from IndexedDB
-async function initializeStore(): Promise<void> {
-	if (!browser || initialized) return;
+// Initialize store from IndexedDB for a specific user
+async function initializeStore(ownerPubkey?: string): Promise<void> {
+	if (!browser) return;
+	
+	// If owner changed, reinitialize
+	if (initialized && ownerPubkey === currentOwnerPubkey) return;
 	
 	try {
-		const annotations = await getAllAnnotations();
-		set(annotations);
+		currentOwnerPubkey = ownerPubkey || null;
+		if (ownerPubkey) {
+			const annotations = await getAllAnnotations(ownerPubkey);
+			set(annotations);
+			console.log(`[Annotations] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${annotations.length} annotations`);
+		} else {
+			// No user logged in - empty annotations
+			set([]);
+			console.log('[Annotations] No user logged in, annotations empty');
+		}
 		initialized = true;
 	} catch (e) {
 		console.error('Failed to initialize annotations store:', e);
@@ -71,11 +83,17 @@ async function upsertAnnotation(
 		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
 	);
 	
+	// Require user to be logged in
+	if (!currentOwnerPubkey) {
+		throw new Error('Cannot create annotation: no user logged in');
+	}
+	
 	// Build plain object to avoid reactive proxy issues with IndexedDB
 	let annotation: AnnotationLocal = {
 		bookSha256,
 		cfiRange,
 		text: data.text ?? existing?.text ?? '',
+		ownerPubkey: existing?.ownerPubkey ?? currentOwnerPubkey,
 		highlightColor: data.highlightColor !== undefined ? data.highlightColor : existing?.highlightColor,
 		// null means "clear the note", undefined means "don't change"
 		note: data.note === null ? undefined : (data.note !== undefined ? data.note : existing?.note),
@@ -256,9 +274,14 @@ async function mergeFromNostr(remoteAnnotations: Annotation[]): Promise<{ merged
 		
 		if (!local) {
 			// New annotation from Nostr - add it
+			if (!currentOwnerPubkey) {
+				console.warn('[Annotations] Cannot merge annotation: no user logged in');
+				continue;
+			}
 			console.log(`[Annotations]   + New: ${key.slice(0, 30)}...`);
 			const newAnnotation: AnnotationLocal = {
 				...remote,
+				ownerPubkey: remote.ownerPubkey || currentOwnerPubkey,
 				nostrEventId: remote.nostrEventId,
 				nostrCreatedAt: remote.nostrCreatedAt,
 				syncPending: false,

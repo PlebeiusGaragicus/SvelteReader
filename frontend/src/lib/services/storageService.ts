@@ -14,17 +14,23 @@ interface SvelteReaderDB extends DBSchema {
 	books: {
 		key: string;
 		value: Book;
-		indexes: { 'by-sha256': string };
+		indexes: { 
+			'by-sha256': string;
+			'by-owner': string;
+		};
 	};
 	annotations: {
 		key: string;
 		value: AnnotationLocal;
-		indexes: { 'by-book': string };
+		indexes: { 
+			'by-book': string;
+			'by-owner': string;
+		};
 	};
 }
 
 const DB_NAME = 'sveltereader';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<SvelteReaderDB>> | null = null;
 
@@ -35,7 +41,7 @@ function getDB(): Promise<IDBPDatabase<SvelteReaderDB>> {
 
 	if (!dbPromise) {
 		dbPromise = openDB<SvelteReaderDB>(DB_NAME, DB_VERSION, {
-			upgrade(db, oldVersion) {
+			upgrade(db, oldVersion, _newVersion, transaction) {
 				// Version 1: epubs and locations
 				if (!db.objectStoreNames.contains('epubs')) {
 					db.createObjectStore('epubs');
@@ -53,6 +59,18 @@ function getDB(): Promise<IDBPDatabase<SvelteReaderDB>> {
 					if (!db.objectStoreNames.contains('annotations')) {
 						const annotationsStore = db.createObjectStore('annotations');
 						annotationsStore.createIndex('by-book', 'bookSha256', { unique: false });
+					}
+				}
+				
+				// Version 3: add ownerPubkey indexes for user scoping
+				if (oldVersion < 3) {
+					const booksStore = transaction.objectStore('books');
+					if (!booksStore.indexNames.contains('by-owner')) {
+						booksStore.createIndex('by-owner', 'ownerPubkey', { unique: false });
+					}
+					const annotationsStore = transaction.objectStore('annotations');
+					if (!annotationsStore.indexNames.contains('by-owner')) {
+						annotationsStore.createIndex('by-owner', 'ownerPubkey', { unique: false });
 					}
 				}
 			}
@@ -207,11 +225,15 @@ export async function getBookBySha256(sha256: string): Promise<Book | null> {
 	}
 }
 
-export async function getAllBooks(): Promise<Book[]> {
+export async function getAllBooks(ownerPubkey?: string): Promise<Book[]> {
 	if (!browser) return [];
 
 	try {
 		const db = await getDB();
+		if (ownerPubkey) {
+			return await db.getAllFromIndex('books', 'by-owner', ownerPubkey);
+		}
+		// If no owner specified, return all (for migration/admin purposes)
 		return await db.getAll('books');
 	} catch (e) {
 		console.error('Failed to get all books:', e);
@@ -294,11 +316,15 @@ export async function getAnnotationsByBook(bookSha256: string): Promise<Annotati
 	}
 }
 
-export async function getAllAnnotations(): Promise<AnnotationLocal[]> {
+export async function getAllAnnotations(ownerPubkey?: string): Promise<AnnotationLocal[]> {
 	if (!browser) return [];
 
 	try {
 		const db = await getDB();
+		if (ownerPubkey) {
+			return await db.getAllFromIndex('annotations', 'by-owner', ownerPubkey);
+		}
+		// If no owner specified, return all (for migration/admin purposes)
 		return await db.getAll('annotations');
 	} catch (e) {
 		console.error('Failed to get all annotations:', e);

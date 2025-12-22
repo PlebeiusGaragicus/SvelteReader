@@ -194,8 +194,10 @@
 		setReadingMode(true);
 
 		// Ensure stores are initialized before checking for book
-		await books.initialize();
-		await annotations.initialize();
+		// Use cyphertap pubkey if logged in
+		const userPubkey = cyphertap.isLoggedIn ? cyphertap.getUserHex() : undefined;
+		await books.initialize(userPubkey || undefined);
+		await annotations.initialize(userPubkey || undefined);
 
 		// Re-check for book after initialization
 		const currentBooks = $books;

@@ -22,17 +22,29 @@ const { subscribe, set, update } = writable<Book[]>([]);
 
 // Track if store has been initialized from IndexedDB
 let initialized = false;
+let currentOwnerPubkey: string | null = null;
 
 // CypherTap instance for Nostr publishing
 let cyphertapInstance: CyphertapPublisher | null = null;
 
-// Initialize store from IndexedDB
-async function initializeStore(): Promise<void> {
-	if (!browser || initialized) return;
+// Initialize store from IndexedDB for a specific user
+async function initializeStore(ownerPubkey?: string): Promise<void> {
+	if (!browser) return;
+	
+	// If owner changed, reinitialize
+	if (initialized && ownerPubkey === currentOwnerPubkey) return;
 	
 	try {
-		const books = await getAllBooks();
-		set(books);
+		currentOwnerPubkey = ownerPubkey || null;
+		if (ownerPubkey) {
+			const books = await getAllBooks(ownerPubkey);
+			set(books);
+			console.log(`[Books] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${books.length} books`);
+		} else {
+			// No user logged in - empty library
+			set([]);
+			console.log('[Books] No user logged in, library empty');
+		}
 		initialized = true;
 	} catch (e) {
 		console.error('Failed to initialize books store:', e);
@@ -47,11 +59,15 @@ async function ensureInitialized(): Promise<void> {
 }
 
 // Add a new book
-async function addBook(book: Omit<Book, 'id'>): Promise<string> {
+async function addBook(book: Omit<Book, 'id' | 'ownerPubkey'>): Promise<string> {
 	await ensureInitialized();
 	
+	if (!currentOwnerPubkey) {
+		throw new Error('Cannot add book: no user logged in');
+	}
+	
 	const id = crypto.randomUUID();
-	const newBook: Book = { ...book, id };
+	const newBook: Book = { ...book, id, ownerPubkey: currentOwnerPubkey };
 	
 	await storeBook(newBook);
 	
@@ -214,10 +230,15 @@ async function mergeFromNostr(remoteBooks: FetchedBook[]): Promise<{ merged: num
 		
 		if (!local) {
 			// New book from Nostr - create ghost book
+			if (!currentOwnerPubkey) {
+				console.warn('[Books] Cannot create ghost book: no user logged in');
+				continue;
+			}
 			console.log(`[Books]   + Ghost book: ${remote.title}`);
 			const ghostBook: Book = {
 				id: crypto.randomUUID(),
 				sha256: remote.sha256,
+				ownerPubkey: currentOwnerPubkey,
 				title: remote.title,
 				author: remote.author,
 				isbn: remote.isbn,

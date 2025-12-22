@@ -18,6 +18,7 @@ export interface BookIdentity {
 export interface BookLocal {
 	id: string;                  // Local UUID (IndexedDB key for epubs store)
 	sha256: string;              // Links to BookIdentity + Annotations
+	ownerPubkey: string;         // Nostr pubkey (hex) of the user who owns this book
 	progress: number;            // 0-100
 	currentPage: number;
 	totalPages: number;
@@ -47,6 +48,7 @@ export interface Annotation {
 	bookSha256: string;                      // Links to book by content hash
 	cfiRange: string;                        // EPUB CFI location
 	text: string;                            // Selected text
+	ownerPubkey: string;                     // Nostr pubkey (hex) of the user who owns this
 	highlightColor?: AnnotationColor | null; // null = explicitly no highlight
 	note?: string;                           // User's note
 	createdAt: number;                       // Unix timestamp (ms)
