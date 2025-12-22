@@ -14,8 +14,8 @@
 
 		<div class="flex items-center gap-2">
 			{#if browser}
-				<SyncStatusButton />
 				<Cyphertap />
+				<SyncStatusButton />
 			{:else}
 				<div class="h-9 w-9"></div>
 			{/if}
