@@ -294,6 +294,11 @@
 				isUserMenuOpen.set(false);
 			});
 
+			// Handle page turns from within iframe (keyboard events captured by epub)
+			epubService.onPageTurn(() => {
+				handlePopupClose();
+			});
+
 			// Update location and chapter positions when accurate locations become available
 			epubService.setOnLocationsReady(async () => {
 				console.log('Locations ready, recalculating chapters...');
@@ -398,10 +403,10 @@
 		}
 	}
 
-	function deleteAnnotation(bookSha256: string, cfiRange: string): void {
+	async function deleteAnnotation(bookSha256: string, cfiRange: string): Promise<void> {
 		if (book) {
 			epubService.removeHighlight(cfiRange);
-			annotations.remove(bookSha256, cfiRange);
+			await annotations.remove(bookSha256, cfiRange);
 		}
 	}
 
@@ -411,9 +416,10 @@
 	}
 
 	// Composable annotation save data type (no legacy fields)
+	// Note: null means "clear this field", undefined means "don't change"
 	interface AnnotationSaveData {
 		highlightColor?: AnnotationColor | null;
-		note?: string;
+		note?: string | null;
 		chatThreadId?: string;
 	}
 

@@ -7,7 +7,7 @@
 	interface Props {
 		annotations: AnnotationLocal[];
 		onClose: () => void;
-		onDelete: (annotation: AnnotationLocal) => void;
+		onDelete: (annotation: AnnotationLocal) => void | Promise<void>;
 		onNavigate: (annotation: AnnotationLocal) => void;
 	}
 
@@ -102,9 +102,9 @@
 					>
 						<p class="text-sm italic">"{annotation.text}"</p>
 						{#if annotation.note}
-							<div class="mt-2 flex items-start gap-2 border-t border-border/50 pt-2">
-								<MessageSquare class="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-								<p class="text-sm text-muted-foreground">{annotation.note}</p>
+							<div class="mt-2 flex items-start gap-2 rounded-md bg-green-900/30 border border-green-600/50 p-2">
+								<MessageSquare class="mt-0.5 h-3 w-3 shrink-0 text-green-400" />
+								<p class="text-sm text-green-100">{annotation.note}</p>
 							</div>
 						{/if}
 						{#if annotationHasChat(annotation)}

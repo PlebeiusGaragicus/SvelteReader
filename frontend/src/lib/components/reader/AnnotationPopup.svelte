@@ -20,7 +20,7 @@
 		// Common
 		position: { x: number; y: number };
 		onSave: (data: AnnotationSaveData) => void | Promise<void>;
-		onDelete?: () => void;
+		onDelete?: () => void | Promise<void>;
 		onClose: () => void;
 		onOpenAIChat?: (context: { text: string; cfiRange: string; note?: string; threadId?: string; annotationKey?: string }) => void;
 	}
@@ -68,8 +68,9 @@
 		}
 	});
 
-	// Click outside to close
+	// Click outside to close (but not when delete confirmation is showing)
 	function handleClickOutside(event: MouseEvent) {
+		if (showDeleteConfirm) return; // Don't close while confirmation modal is open
 		if (popupElement && !popupElement.contains(event.target as Node)) {
 			onClose();
 		}
@@ -129,6 +130,7 @@
 					highlightColor: color,
 					note: annotation.note
 				});
+				onClose();
 			} else {
 				// Clicking the same color - toggle highlight off (but keep note/chat if present)
 				if (annotation.note || annotationHasChat(annotation)) {
@@ -137,6 +139,7 @@
 						highlightColor: null,
 						note: annotation.note
 					});
+					onClose();
 				} else {
 					// Only has highlight - delete entire annotation
 					onDelete?.();
@@ -148,6 +151,7 @@
 			userSelectedHighlight = true;
 			if (!showNoteInput) {
 				onSave({ highlightColor: color });
+				onClose();
 			}
 		}
 	}
@@ -168,14 +172,14 @@
 			? (annotation?.highlightColor ?? null)
 			: (userSelectedHighlight ? selectedColor : null);
 		
-		// Close popup first to avoid positioning issues during async save
-		onClose();
-		
-		// Then save (fire and forget - errors handled by parent)
+		// Save first (onClose clears textSelection/editingAnnotation which onSave needs)
 		onSave({ 
 			highlightColor,
 			note
 		});
+		
+		// Then close popup
+		onClose();
 	}
 
 	function handleDeleteNote() {
@@ -184,12 +188,13 @@
 		// If annotation has highlight or chat threads, just remove the note
 		// Otherwise, delete the entire annotation
 		if (hasHighlight || hasChat) {
-			// Close popup first to avoid positioning issues
-			onClose();
+			// Save first, then close (onClose clears state that onSave needs)
+			// Use null to explicitly clear the note (undefined means "don't change")
 			onSave({ 
 				highlightColor: annotation?.highlightColor ?? null,
-				note: undefined
+				note: null
 			});
+			onClose();
 		} else {
 			// No other content - delete entire annotation
 			onDelete?.();
@@ -364,7 +369,10 @@
 					Cancel
 				</button>
 				<button
-					onclick={() => { showDeleteConfirm = false; onDelete?.(); }}
+					onclick={async () => { 
+						showDeleteConfirm = false; 
+						await onDelete?.(); 
+					}}
 					class="rounded-md bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:bg-destructive/90"
 				>
 					Delete

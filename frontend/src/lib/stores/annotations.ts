@@ -77,7 +77,8 @@ async function upsertAnnotation(
 		cfiRange,
 		text: data.text ?? existing?.text ?? '',
 		highlightColor: data.highlightColor !== undefined ? data.highlightColor : existing?.highlightColor,
-		note: data.note !== undefined ? data.note : existing?.note,
+		// null means "clear the note", undefined means "don't change"
+		note: data.note === null ? undefined : (data.note !== undefined ? data.note : existing?.note),
 		createdAt: existing?.createdAt ?? Date.now(),
 		// Ensure chatThreadIds is a plain array copy
 		chatThreadIds: data.chatThreadIds 
@@ -151,17 +152,19 @@ async function removeAnnotation(bookSha256: string, cfiRange: string): Promise<v
 	
 	await deleteAnnotationFromDB(bookSha256, cfiRange);
 	
-	// Publish deletion to Nostr if the annotation was previously published
-	if (existing?.nostrEventId && cyphertapInstance?.isLoggedIn) {
-		const result = await publishAnnotationDeletion(bookSha256, cfiRange, cyphertapInstance);
-		if (!result.success) {
-			console.warn('Failed to publish annotation deletion to Nostr:', result.error);
-		}
-	}
-	
+	// Update store immediately (optimistic update) so UI reflects deletion right away
 	update(annotations =>
 		annotations.filter(a => !(a.bookSha256 === bookSha256 && a.cfiRange === cfiRange))
 	);
+	
+	// Publish deletion to Nostr in background if the annotation was previously published
+	if (existing?.nostrEventId && cyphertapInstance?.isLoggedIn) {
+		publishAnnotationDeletion(bookSha256, cfiRange, cyphertapInstance).then(result => {
+			if (!result.success) {
+				console.warn('Failed to publish annotation deletion to Nostr:', result.error);
+			}
+		});
+	}
 }
 
 // Remove all annotations for a book
