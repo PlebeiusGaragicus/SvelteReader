@@ -163,6 +163,7 @@
 <a
 	href="/book/{book.id}"
 	class="book-card group relative cursor-pointer overflow-visible rounded-lg border border-border bg-card transition-shadow hover:shadow-lg"
+	onmouseleave={() => menuOpen = false}
 >
 	<div class="relative aspect-[2/3] overflow-hidden rounded-t-lg bg-muted">
 		{#if coverUrl}
@@ -193,53 +194,55 @@
 		{/if}
 	</div>
 
-	<!-- Context Menu Button - outside overflow container -->
-	<div 
-		bind:this={menuElement}
-		class="absolute right-2 top-2 z-20 opacity-0 transition-opacity group-hover:opacity-100"
-	>
-		<button
-			onclick={(e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				menuOpen = !menuOpen;
-			}}
-			class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/80 backdrop-blur hover:bg-background"
-			aria-label="Book options"
+	<!-- Context Menu Button - hidden when spectating (can't edit/delete other users' books) -->
+	{#if !spectateStore.isSpectating}
+		<div 
+			bind:this={menuElement}
+			class="absolute right-2 top-2 z-20 opacity-0 transition-opacity group-hover:opacity-100"
 		>
-			<MoreVertical class="h-4 w-4" />
-		</button>
+			<button
+				onclick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					menuOpen = !menuOpen;
+				}}
+				class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/80 backdrop-blur hover:bg-background"
+				aria-label="Book options"
+			>
+				<MoreVertical class="h-4 w-4" />
+			</button>
 
-		{#if menuOpen}
-			<div class="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-lg">
-					{#if !book.hasEpubData}
-						<!-- Ghost book: show Upload EPUB option -->
+			{#if menuOpen}
+				<div class="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-border bg-popover p-1 shadow-lg">
+						{#if !book.hasEpubData}
+							<!-- Ghost book: show Upload EPUB option -->
+							<button
+								onclick={triggerUploadEpub}
+								class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+							>
+								<Upload class="h-4 w-4" />
+								Upload EPUB
+							</button>
+						{/if}
 						<button
-							onclick={triggerUploadEpub}
+							onclick={openEditModal}
 							class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
 						>
-							<Upload class="h-4 w-4" />
-							Upload EPUB
+							<Pencil class="h-4 w-4" />
+							Edit Metadata
 						</button>
-					{/if}
-					<button
-						onclick={openEditModal}
-						class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-					>
-						<Pencil class="h-4 w-4" />
-						Edit Metadata
-					</button>
-					<div class="my-1 border-t border-border"></div>
-					<button
-						onclick={openDeleteModal}
-						class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-accent"
-					>
-						<Trash2 class="h-4 w-4" />
-						Delete...
-					</button>
+						<div class="my-1 border-t border-border"></div>
+						<button
+							onclick={openDeleteModal}
+							class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-accent"
+						>
+							<Trash2 class="h-4 w-4" />
+							Delete...
+						</button>
 				</div>
-		{/if}
-	</div>
+			{/if}
+		</div>
+	{/if}
 
 	<div class="p-2">
 		<h3 class="mb-0.5 line-clamp-2 text-xs font-semibold">{book.title}</h3>

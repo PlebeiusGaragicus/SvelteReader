@@ -49,6 +49,23 @@
 		}
 	}
 	
+	// Helper: Format relative time (e.g., "5 minutes ago", "2 hours ago")
+	function formatRelativeTime(date: Date | number): string {
+		const now = Date.now();
+		const timestamp = typeof date === 'number' ? date : date.getTime();
+		const diffMs = now - timestamp;
+		const diffSec = Math.floor(diffMs / 1000);
+		const diffMin = Math.floor(diffSec / 60);
+		const diffHour = Math.floor(diffMin / 60);
+		const diffDay = Math.floor(diffHour / 24);
+		
+		if (diffSec < 60) return 'just now';
+		if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? '' : 's'} ago`;
+		if (diffHour < 24) return `${diffHour} hour${diffHour === 1 ? '' : 's'} ago`;
+		if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
+		return new Date(timestamp).toLocaleDateString();
+	}
+	
 	// Helper: Parse relay URLs from text input
 	function parseRelays(input: string): string[] {
 		return input
@@ -335,7 +352,7 @@
 	{#if showPopover}
 		<div
 			bind:this={popoverRef}
-			class="absolute right-0 top-full mt-2 w-80 rounded-lg border border-border bg-popover p-4 shadow-lg z-50"
+			class="absolute right-0 top-full mt-2 w-96 rounded-lg border border-border bg-popover p-4 shadow-lg z-50"
 			onclick={(e) => e.stopPropagation()}
 		>
 			{#if currentView === 'history'}
@@ -367,7 +384,7 @@
 									{/if}
 									<div class="flex-1 min-w-0">
 										<p class="text-sm font-medium truncate">
-											{entry.profile?.displayName || entry.profile?.name || entry.npub.slice(0, 16) + '...'}
+											{entry.profile?.displayName || entry.profile?.name || truncateNpubMiddle(entry.npub, 20)}
 										</p>
 										<p class="text-xs text-muted-foreground truncate">
 											{entry.relays.length} relay{entry.relays.length !== 1 ? 's' : ''}
@@ -480,14 +497,14 @@
 								<p class="font-medium truncate">
 									{spectateStore.target.profile.displayName || spectateStore.target.profile.name || 'Unknown'}
 								</p>
-								<p class="text-xs text-muted-foreground truncate">
-									{spectateStore.target.npub.slice(0, 20)}...
+								<p class="text-xs text-muted-foreground font-mono">
+									{truncateNpubMiddle(spectateStore.target.npub)}
 								</p>
 							</div>
 						</div>
 					{:else}
-						<p class="text-sm text-muted-foreground truncate">
-							{spectateStore.target.npub}
+						<p class="text-sm text-muted-foreground font-mono">
+							{truncateNpubMiddle(spectateStore.target.npub)}
 						</p>
 					{/if}
 					
@@ -495,20 +512,21 @@
 						<p class="text-sm text-destructive">{inputError}</p>
 					{/if}
 					
-					<div class="flex gap-2 items-center">
+					{#if spectateStore.target.lastSynced}
+						<p class="text-xs text-muted-foreground">
+							Last synced {formatRelativeTime(spectateStore.target.lastSynced)}
+						</p>
+					{/if}
+					
+					<div class="flex gap-2">
 						<button
 							onclick={handleSync}
 							disabled={isLoading}
-							class="flex items-center justify-center gap-2 rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80 disabled:opacity-50"
+							class="flex-1 flex items-center justify-center gap-2 rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80 disabled:opacity-50"
 						>
 							<RefreshCw class="h-4 w-4 {isLoading ? 'animate-spin' : ''}" />
 							{isLoading ? 'Syncing...' : 'Sync'}
 						</button>
-						{#if spectateStore.target.lastSynced}
-							<span class="text-xs text-muted-foreground flex-1">
-								{new Date(spectateStore.target.lastSynced).toLocaleString()}
-							</span>
-						{/if}
 						<button
 							onclick={handleClearData}
 							class="flex items-center justify-center rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80"
@@ -535,7 +553,7 @@
 					<button
 						onclick={goToHistory}
 						disabled={spectateStore.history.length === 0}
-						class="w-full flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm {spectateStore.history.length > 0 ? 'bg-secondary text-secondary-foreground hover:bg-secondary/80' : 'bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'}"
+						class="w-full flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm {spectateStore.history.length > 0 ? 'bg-primary text-primary-foreground hover:bg-primary/90' : 'bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'}"
 					>
 						<History class="h-4 w-4" />
 						Previously viewed users
@@ -582,7 +600,7 @@
 							<RefreshCw class="h-4 w-4 animate-spin" />
 							Fetching...
 						{:else}
-							View Library
+							Browse this user's library
 						{/if}
 					</button>
 				</div>

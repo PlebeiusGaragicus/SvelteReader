@@ -6,6 +6,14 @@
 	import BookCard from '$lib/components/BookCard.svelte';
 	import ImportButton from '$lib/components/ImportButton.svelte';
 	import { BookOpen, Binoculars, Library, FolderOpen } from '@lucide/svelte';
+
+	// Helper: Middle-truncate an npub (e.g., "npub1abc...xyz")
+	function truncateNpubMiddle(npub: string, maxLength: number = 24): string {
+		if (npub.length <= maxLength) return npub;
+		const prefixLength = 8; // "npub1" + a few chars
+		const suffixLength = 6;
+		return `${npub.slice(0, prefixLength)}...${npub.slice(-suffixLength)}`;
+	}
 	import { cyphertap } from 'cyphertap';
 	import { onMount } from 'svelte';
 
@@ -116,7 +124,7 @@
 						<h1 class="library-header text-2xl font-bold">
 							{spectateStore.target.profile?.displayName || spectateStore.target.profile?.name || 'User'}'s Library
 						</h1>
-						<p class="text-xs text-muted-foreground">{spectateStore.target.npub.slice(0, 20)}...</p>
+						<p class="text-xs text-muted-foreground font-mono">{truncateNpubMiddle(spectateStore.target.npub)}</p>
 					</div>
 				</div>
 				<span class="rounded-full bg-blue-500/20 px-3 py-1 text-sm text-blue-400">View Only</span>

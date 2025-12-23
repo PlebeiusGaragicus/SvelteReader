@@ -92,11 +92,16 @@ function persistHistory(): void {
 // Start spectating a user
 function startSpectating(pubkey: string, npub: string, relays: string[]): void {
 	console.log(`[Spectate] Starting to spectate ${npub.slice(0, 12)}...`);
+	
+	// Check if we have existing history for this user to get lastSynced
+	const existingEntry = history.find(h => h.pubkey === pubkey);
+	
 	target = {
 		pubkey,
 		npub,
 		relays,
-		lastSynced: undefined
+		lastSynced: existingEntry?.lastSynced,
+		profile: existingEntry?.profile
 	};
 	isSpectating = true;
 	persistState();
@@ -174,6 +179,9 @@ function setLastSynced(timestamp: number): void {
 	if (target) {
 		target = { ...target, lastSynced: timestamp };
 		persistState();
+		
+		// Also update history entry so it persists across sessions
+		updateHistoryEntry(target.pubkey, { lastSynced: timestamp });
 	}
 }
 
