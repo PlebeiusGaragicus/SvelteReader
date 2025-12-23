@@ -5,6 +5,8 @@ import {
 	storeBook,
 	getBook,
 	getAllBooks,
+	getBooksWithEpubData,
+	getBookBySha256ForOwner,
 	deleteBook as deleteBookFromDB,
 	getAnnotationsByBook,
 	deleteAnnotationsByBook
@@ -114,7 +116,7 @@ async function removeBook(id: string, deleteAnnotations: boolean = false): Promi
 }
 
 // Update book progress
-async function updateProgress(id: string, currentPage: number, currentCfi?: string): Promise<void> {
+async function updateProgress(id: string, currentPage: number, currentCfi?: string, totalPages?: number): Promise<void> {
 	await ensureInitialized();
 	
 	const currentBooks = get({ subscribe });
@@ -122,10 +124,14 @@ async function updateProgress(id: string, currentPage: number, currentCfi?: stri
 	
 	if (!book) return;
 	
+	// Use provided totalPages or fall back to book's stored value
+	const effectiveTotalPages = totalPages ?? book.totalPages;
+	
 	const updatedBook: Book = {
 		...book,
 		currentPage,
-		progress: Math.round((currentPage / book.totalPages) * 100),
+		totalPages: effectiveTotalPages > 0 ? effectiveTotalPages : book.totalPages,
+		progress: effectiveTotalPages > 0 ? Math.round((currentPage / effectiveTotalPages) * 100) : 0,
 		currentCfi: currentCfi ?? book.currentCfi
 	};
 	
@@ -301,6 +307,61 @@ function reset(): void {
 	initialized = false;
 }
 
+// Get books with EPUB data that belong to other users (for "Available Books" section)
+async function getOtherBooksWithEpub(): Promise<Book[]> {
+	if (!browser) return [];
+	return getBooksWithEpubData(currentOwnerPubkey || undefined);
+}
+
+// Check if current user already has this book (by sha256)
+async function currentUserHasBook(sha256: string): Promise<boolean> {
+	if (!currentOwnerPubkey) return false;
+	const book = await getBookBySha256ForOwner(sha256, currentOwnerPubkey);
+	return book !== null;
+}
+
+// "Adopt" a book - create a new book record for current user, reusing existing EPUB data
+// The sourceBookId is used to find the EPUB data to share
+async function adoptBook(sourceBook: Book): Promise<string> {
+	if (!currentOwnerPubkey) {
+		throw new Error('Cannot adopt book: no user logged in');
+	}
+	
+	// Check if user already has this book
+	const existing = await getBookBySha256ForOwner(sourceBook.sha256, currentOwnerPubkey);
+	if (existing) {
+		throw new Error('Book already in your library');
+	}
+	
+	const id = crypto.randomUUID();
+	const newBook: Book = {
+		id,
+		ownerPubkey: currentOwnerPubkey,
+		sha256: sourceBook.sha256,
+		title: sourceBook.title,
+		author: sourceBook.author,
+		isbn: sourceBook.isbn,
+		year: sourceBook.year,
+		coverBase64: sourceBook.coverBase64,
+		progress: 0,
+		currentPage: 0,
+		totalPages: sourceBook.totalPages,
+		hasEpubData: sourceBook.hasEpubData, // Will be true since we're adopting from a book with EPUB
+		isPublic: false, // Start as private, user can publish later
+		syncPending: false,
+	};
+	
+	await storeBook(newBook);
+	update(books => [...books, newBook]);
+	
+	return id;
+}
+
+// Get current owner pubkey (for external checks)
+function getCurrentOwner(): string | null {
+	return currentOwnerPubkey;
+}
+
 export const books = {
 	subscribe,
 	initialize: initializeStore,
@@ -313,5 +374,9 @@ export const books = {
 	setCyphertap,
 	publishBook,
 	mergeFromNostr,
-	reset
+	reset,
+	getOtherBooksWithEpub,
+	currentUserHasBook,
+	adoptBook,
+	getCurrentOwner
 };

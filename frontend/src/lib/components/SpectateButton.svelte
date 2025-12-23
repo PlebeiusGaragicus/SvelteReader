@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eye, X, RefreshCw, Trash2, Settings, History, ChevronLeft } from '@lucide/svelte';
+	import { Eye, X, RefreshCw, Trash2, Settings, History, ChevronLeft, Copy, Check } from '@lucide/svelte';
 	import { get } from 'svelte/store';
 	import { spectateStore, type SpectateHistoryEntry } from '$lib/stores/spectate.svelte';
 	import { fetchRemoteUserData } from '$lib/services/nostrService';
@@ -25,7 +25,29 @@
 	let popoverRef: HTMLDivElement;
 	let buttonRef: HTMLButtonElement;
 	
+	// Copy button state
+	let copiedNpub = $state(false);
+	
 	const defaultRelays = getDefaultRelays();
+	
+	// Helper: Middle-truncate an npub (e.g., "npub1abc...xyz")
+	function truncateNpubMiddle(npub: string, maxLength: number = 24): string {
+		if (npub.length <= maxLength) return npub;
+		const prefixLength = 8; // "npub1" + a few chars
+		const suffixLength = 6;
+		return `${npub.slice(0, prefixLength)}...${npub.slice(-suffixLength)}`;
+	}
+	
+	// Helper: Copy npub to clipboard
+	async function copyNpub(npub: string): Promise<void> {
+		try {
+			await navigator.clipboard.writeText(npub);
+			copiedNpub = true;
+			setTimeout(() => { copiedNpub = false; }, 2000);
+		} catch (e) {
+			console.error('Failed to copy:', e);
+		}
+	}
 	
 	// Helper: Parse relay URLs from text input
 	function parseRelays(input: string): string[] {
@@ -313,13 +335,13 @@
 	{#if showPopover}
 		<div
 			bind:this={popoverRef}
-			class="absolute left-0 top-full mt-2 w-80 rounded-lg border border-border bg-popover p-4 shadow-lg z-50"
+			class="absolute right-0 top-full mt-2 w-80 rounded-lg border border-border bg-popover p-4 shadow-lg z-50"
 			onclick={(e) => e.stopPropagation()}
 		>
 			{#if currentView === 'history'}
 				<!-- History View -->
 				<div class="space-y-3">
-					<div class="flex items-center justify-between">
+					<div class="flex items-center gap-2">
 						<button
 							onclick={goToMain}
 							class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -327,10 +349,7 @@
 							<ChevronLeft class="h-4 w-4" />
 							Back
 						</button>
-						<h3 class="font-semibold text-sm">History</h3>
-						<button onclick={closePopover} class="text-muted-foreground hover:text-foreground">
-							<X class="h-4 w-4" />
-						</button>
+						<h3 class="font-semibold text-sm">Previously viewed users</h3>
 					</div>
 					
 					{#if spectateStore.history.length === 0}
@@ -390,7 +409,7 @@
 			{:else if currentView === 'editRelays'}
 				<!-- Edit Relays View -->
 				<div class="space-y-3">
-					<div class="flex items-center justify-between">
+					<div class="flex items-center gap-2">
 						<button
 							onclick={goToHistory}
 							class="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -399,15 +418,26 @@
 							Back
 						</button>
 						<h3 class="font-semibold text-sm">Edit Relays</h3>
-						<button onclick={closePopover} class="text-muted-foreground hover:text-foreground">
-							<X class="h-4 w-4" />
-						</button>
 					</div>
 					
 					{#if editingHistoryEntry}
-						<p class="text-sm text-muted-foreground truncate">
-							{editingHistoryEntry.profile?.displayName || editingHistoryEntry.profile?.name || editingHistoryEntry.npub.slice(0, 20) + '...'}
-						</p>
+						<div class="flex items-center justify-between gap-2">
+							<p class="text-sm text-muted-foreground">
+								{editingHistoryEntry.profile?.displayName || editingHistoryEntry.profile?.name || truncateNpubMiddle(editingHistoryEntry.npub)}
+							</p>
+							<button
+								onclick={() => copyNpub(editingHistoryEntry!.npub)}
+								class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+								title="Copy npub"
+							>
+								{#if copiedNpub}
+									<Check class="h-3 w-3 text-green-500" />
+								{:else}
+									<Copy class="h-3 w-3" />
+								{/if}
+								<span class="font-mono">{truncateNpubMiddle(editingHistoryEntry.npub, 18)}</span>
+							</button>
+						</div>
 						
 						<div>
 							<label for="edit-relay-input" class="text-xs text-muted-foreground">
@@ -437,21 +467,7 @@
 			{:else if spectateStore.isSpectating && spectateStore.target}
 				<!-- Spectating View -->
 				<div class="space-y-3">
-					<div class="flex items-center justify-between">
-						<h3 class="font-semibold text-sm">Spectating</h3>
-						<div class="flex items-center gap-1">
-							<button
-								onclick={goToHistory}
-								class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-								title="View history"
-							>
-								<History class="h-4 w-4" />
-							</button>
-							<button onclick={closePopover} class="text-muted-foreground hover:text-foreground">
-								<X class="h-4 w-4" />
-							</button>
-						</div>
-					</div>
+					<h3 class="font-semibold">Currently Spectating</h3>
 					
 					{#if spectateStore.target.profile?.picture}
 						<div class="flex items-center gap-3">
@@ -475,25 +491,24 @@
 						</p>
 					{/if}
 					
-					{#if spectateStore.target.lastSynced}
-						<p class="text-xs text-muted-foreground">
-							Last synced: {new Date(spectateStore.target.lastSynced).toLocaleString()}
-						</p>
-					{/if}
-					
 					{#if inputError}
 						<p class="text-sm text-destructive">{inputError}</p>
 					{/if}
 					
-					<div class="flex gap-2">
+					<div class="flex gap-2 items-center">
 						<button
 							onclick={handleSync}
 							disabled={isLoading}
-							class="flex-1 flex items-center justify-center gap-2 rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80 disabled:opacity-50"
+							class="flex items-center justify-center gap-2 rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80 disabled:opacity-50"
 						>
 							<RefreshCw class="h-4 w-4 {isLoading ? 'animate-spin' : ''}" />
 							{isLoading ? 'Syncing...' : 'Sync'}
 						</button>
+						{#if spectateStore.target.lastSynced}
+							<span class="text-xs text-muted-foreground flex-1">
+								{new Date(spectateStore.target.lastSynced).toLocaleString()}
+							</span>
+						{/if}
 						<button
 							onclick={handleClearData}
 							class="flex items-center justify-center rounded-md bg-secondary px-3 py-2 text-sm hover:bg-secondary/80"
@@ -514,21 +529,19 @@
 			{:else}
 				<!-- Main View - Input Form -->
 				<div class="space-y-3">
-					<div class="flex items-center justify-between">
-						<h3 class="font-semibold text-sm">View Another Library</h3>
-						<div class="flex items-center gap-1">
-							<button
-								onclick={goToHistory}
-								class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
-								title="View history"
-							>
-								<History class="h-4 w-4" />
-							</button>
-							<button onclick={closePopover} class="text-muted-foreground hover:text-foreground">
-								<X class="h-4 w-4" />
-							</button>
-						</div>
-					</div>
+					<h3 class="font-semibold">Browse a user's library</h3>
+					
+					<!-- History button - always visible, but disabled when empty -->
+					<button
+						onclick={goToHistory}
+						disabled={spectateStore.history.length === 0}
+						class="w-full flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm {spectateStore.history.length > 0 ? 'bg-secondary text-secondary-foreground hover:bg-secondary/80' : 'bg-muted/50 text-muted-foreground cursor-not-allowed opacity-50'}"
+					>
+						<History class="h-4 w-4" />
+						Previously viewed users
+					</button>
+					
+					<div class="border-t border-border"></div>
 					
 					<div>
 						<label for="npub-input" class="text-xs text-muted-foreground">
@@ -562,8 +575,8 @@
 					
 					<button
 						onclick={startSpectating}
-						disabled={isLoading}
-						class="w-full rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
+						disabled={isLoading || !npubInput.trim()}
+						class="w-full rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
 					>
 						{#if isLoading}
 							<RefreshCw class="h-4 w-4 animate-spin" />

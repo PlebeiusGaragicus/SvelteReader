@@ -1,18 +1,22 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { MoreVertical, Trash2, BookOpen, Ghost, BookX, MessageSquareX, X, Upload, Pencil, Globe, AlertCircle } from '@lucide/svelte';
+	import { MoreVertical, Trash2, BookOpen, Ghost, BookX, MessageSquareX, X, Upload, Pencil, Globe, AlertCircle, Plus, HardDrive } from '@lucide/svelte';
 	import type { Book } from '$lib/stores/books';
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
+	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { removeEpubData, storeEpubData, storeBook, computeSha256 } from '$lib/services/storageService';
 	import BookAnnouncementModal from './BookAnnouncementModal.svelte';
 	import type { BookIdentity } from '$lib/types';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		book: Book;
+		showAdoptButton?: boolean;
+		onAdopt?: () => void;
 	}
 
-	let { book }: Props = $props();
+	let { book, showAdoptButton = false, onAdopt }: Props = $props();
 	let menuOpen = $state(false);
 	let showDeleteModal = $state(false);
 	let showEditModal = $state(false);
@@ -139,6 +143,21 @@
 		document.addEventListener('click', handleClickOutside);
 		return () => document.removeEventListener('click', handleClickOutside);
 	});
+
+	// Handle adopting a book from another user
+	async function handleAdoptBook(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		
+		try {
+			await books.adoptBook(book);
+			toast.success(`Added "${book.title}" to your library`);
+			onAdopt?.();
+		} catch (err) {
+			console.error('[BookCard] Failed to adopt book:', err);
+			toast.error(err instanceof Error ? err.message : 'Failed to add book');
+		}
+	}
 </script>
 
 <a
@@ -225,13 +244,29 @@
 	<div class="p-2">
 		<h3 class="mb-0.5 line-clamp-2 text-xs font-semibold">{book.title}</h3>
 		<p class="line-clamp-1 text-xs text-muted-foreground">{book.author}</p>
-		<div class="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-			<span>{book.progress > 0 ? `${Math.round(book.progress)}%` : ''}</span>
-			{#if book.isPublic}
-				<Globe class="h-3 w-3 text-green-500" />
-			{/if}
-		</div>
+		{#if !spectateStore.isSpectating && !showAdoptButton}
+			<div class="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+				<span>{book.progress > 0 && book.totalPages > 0 ? `${Math.round(book.progress)}%` : ''}</span>
+				{#if book.isPublic}
+					<Globe class="h-3 w-3 text-green-500" title="Published to Nostr" />
+				{:else}
+					<HardDrive class="h-3 w-3 text-muted-foreground" title="Local only" />
+				{/if}
+			</div>
+		{/if}
 	</div>
+	
+	<!-- Add to My Library button (for books from other users) -->
+	{#if showAdoptButton}
+		<button
+			onclick={handleAdoptBook}
+			class="absolute bottom-2 right-2 z-10 flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/90"
+			title="Add to My Library"
+		>
+			<Plus class="h-3 w-3" />
+			Add
+		</button>
+	{/if}
 </a>
 
 <!-- Hidden file input for EPUB upload -->

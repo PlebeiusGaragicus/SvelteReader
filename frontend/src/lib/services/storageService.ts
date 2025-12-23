@@ -113,6 +113,33 @@ export async function getEpubData(bookId: string): Promise<ArrayBuffer | null> {
 	}
 }
 
+export async function getEpubDataBySha256(sha256: string): Promise<ArrayBuffer | null> {
+	if (!browser) return null;
+
+	try {
+		const db = await getDB();
+		// Find any book with this sha256 that has EPUB data
+		const books = await db.getAllFromIndex('books', 'by-sha256', sha256);
+		for (const book of books) {
+			if (book.hasEpubData) {
+				// Try to get EPUB data using this book's id
+				const data = await db.get('epubs', book.id);
+				if (data) {
+					return data;
+				}
+			}
+		}
+		return null;
+	} catch (e) {
+		console.error('Failed to get EPUB data by sha256:', e);
+		throw new AppError(
+			'Failed to retrieve book data from storage.',
+			'STORAGE_READ_FAILED',
+			true
+		);
+	}
+}
+
 export async function removeEpubData(bookId: string): Promise<void> {
 	if (!browser) return;
 
@@ -239,6 +266,44 @@ export async function getAllBooks(ownerPubkey?: string): Promise<Book[]> {
 		console.error('Failed to get all books:', e);
 		throw new AppError(
 			'Failed to retrieve books.',
+			'STORAGE_READ_FAILED',
+			true
+		);
+	}
+}
+
+export async function getBooksWithEpubData(excludeOwner?: string): Promise<Book[]> {
+	if (!browser) return [];
+
+	try {
+		const db = await getDB();
+		const allBooks = await db.getAll('books');
+		// Filter to books that have EPUB data and optionally exclude a specific owner
+		return allBooks.filter(book => 
+			book.hasEpubData && 
+			(!excludeOwner || book.ownerPubkey !== excludeOwner)
+		);
+	} catch (e) {
+		console.error('Failed to get books with EPUB data:', e);
+		throw new AppError(
+			'Failed to retrieve books.',
+			'STORAGE_READ_FAILED',
+			true
+		);
+	}
+}
+
+export async function getBookBySha256ForOwner(sha256: string, ownerPubkey: string): Promise<Book | null> {
+	if (!browser) return null;
+
+	try {
+		const db = await getDB();
+		const books = await db.getAllFromIndex('books', 'by-sha256', sha256);
+		return books.find(b => b.ownerPubkey === ownerPubkey) ?? null;
+	} catch (e) {
+		console.error('Failed to get book by sha256 for owner:', e);
+		throw new AppError(
+			'Failed to retrieve book data.',
 			'STORAGE_READ_FAILED',
 			true
 		);

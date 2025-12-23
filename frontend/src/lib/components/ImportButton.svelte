@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Upload, Loader2 } from '@lucide/svelte';
 	import { books } from '$lib/stores/books';
-	import { storeEpubData, computeSha256, getBookBySha256 } from '$lib/services/storageService';
+	import { storeEpubData, computeSha256, getBookBySha256, getBookBySha256ForOwner } from '$lib/services/storageService';
 	import { epubService } from '$lib/services/epubService';
 	import { AppError, type BookIdentity } from '$lib/types';
 	import { toast } from 'svelte-sonner';
@@ -40,19 +40,30 @@
 			// Compute SHA-256 hash of the EPUB file
 			const sha256 = await computeSha256(parsed.arrayBuffer);
 
-			// Check if book already exists (by content hash)
-			const existingBook = await getBookBySha256(sha256);
-			if (existingBook) {
-				if (existingBook.hasEpubData) {
-					toast.info(`"${existingBook.title}" is already in your library`);
-					return;
-				} else {
-					// Ghost book exists - add EPUB data to it
-					await storeEpubData(existingBook.id, parsed.arrayBuffer);
-					await books.update(existingBook.id, { hasEpubData: true });
-					toast.success(`Added EPUB data to "${existingBook.title}"`);
-					return;
+			// Check if current user already has this book
+			const currentOwner = books.getCurrentOwner();
+			if (currentOwner) {
+				const existingBook = await getBookBySha256ForOwner(sha256, currentOwner);
+				if (existingBook) {
+					if (existingBook.hasEpubData) {
+						toast.info(`"${existingBook.title}" is already in your library`);
+						return;
+					} else {
+						// Ghost book exists for current user - add EPUB data to it
+						await storeEpubData(existingBook.id, parsed.arrayBuffer);
+						await books.update(existingBook.id, { hasEpubData: true });
+						toast.success(`Added EPUB data to "${existingBook.title}"`);
+						return;
+					}
 				}
+			}
+			
+			// Check if any other user has this book with EPUB data (we can reuse it)
+			const anyExistingBook = await getBookBySha256(sha256);
+			if (anyExistingBook?.hasEpubData) {
+				// Another user has this book - we can adopt it (EPUB data is shared)
+				// But still show the announcement modal so user can customize metadata
+				console.log(`[Import] Found existing EPUB from another user, will share data`);
 			}
 
 			// Extract cover as base64 for persistent storage

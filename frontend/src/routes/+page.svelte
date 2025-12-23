@@ -1,12 +1,13 @@
 <script lang="ts">
-	import { books } from '$lib/stores/books';
+	import { books, type Book } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import BookCard from '$lib/components/BookCard.svelte';
 	import ImportButton from '$lib/components/ImportButton.svelte';
-	import { BookOpen, Binoculars } from '@lucide/svelte';
+	import { BookOpen, Binoculars, Library, FolderOpen } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
+	import { onMount } from 'svelte';
 
 	// Set up sync callbacks when logged in (SyncStatusButton is in TopBar)
 	// Only enable sync when NOT spectating (can't sync someone else's data)
@@ -26,6 +27,30 @@
 	
 	// Determine if we should show the library (logged in OR spectating)
 	const canViewLibrary = $derived(cyphertap.isLoggedIn || spectateStore.isSpectating);
+	
+	// Other books with EPUB data (from other users on this device)
+	let otherBooks = $state<Book[]>([]);
+	let showOtherBooks = $state(false);
+	
+	// Load other books when logged in and not spectating
+	async function loadOtherBooks() {
+		if (cyphertap.isLoggedIn && !spectateStore.isSpectating) {
+			const others = await books.getOtherBooksWithEpub();
+			// Filter out books that current user already has (by sha256)
+			const myBookHashes = new Set($books.map(b => b.sha256));
+			otherBooks = others.filter(b => !myBookHashes.has(b.sha256));
+		} else {
+			otherBooks = [];
+		}
+	}
+	
+	// Reload other books when user's books change or login state changes
+	$effect(() => {
+		const _ = $books; // Track changes to user's books
+		const __ = cyphertap.isLoggedIn;
+		const ___ = spectateStore.isSpectating;
+		loadOtherBooks();
+	});
 
 	// Drag and drop state
 	let isDragging = $state(false);
@@ -68,7 +93,7 @@
 			<p class="text-sm text-muted-foreground">Click the user icon in the top right to log in</p>
 			<p class="mt-4 text-sm text-muted-foreground">Or use the <Binoculars class="inline h-4 w-4" /> button to view another user's library</p>
 		</div>
-	{:else if $books.length === 0}
+	{:else if $books.length === 0 && otherBooks.length === 0}
 		<div class="flex flex-col items-center justify-center py-20 text-center">
 			{#if spectateStore.isSpectating}
 				<Binoculars class="mb-4 h-20 w-20 text-blue-400" />
@@ -82,6 +107,7 @@
 			{/if}
 		</div>
 	{:else}
+		<!-- Header -->
 		<div class="mb-6 flex items-center justify-between">
 			{#if spectateStore.isSpectating && spectateStore.target}
 				<div class="flex items-center gap-3">
@@ -95,15 +121,51 @@
 				</div>
 				<span class="rounded-full bg-blue-500/20 px-3 py-1 text-sm text-blue-400">View Only</span>
 			{:else}
-				<h1 class="library-header text-2xl font-bold">Library</h1>
+				<h1 class="library-header text-2xl font-bold">My Library</h1>
 				<ImportButton bind:this={importButtonRef} />
 			{/if}
 		</div>
-		<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-			{#each $books as book (book.id)}
-				<BookCard {book} />
-			{/each}
-		</div>
+		
+		<!-- My Library Section -->
+		{#if $books.length > 0}
+			<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+				{#each $books as book (book.id)}
+					<BookCard {book} />
+				{/each}
+			</div>
+		{:else if !spectateStore.isSpectating}
+			<div class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border rounded-lg">
+				<BookOpen class="mb-4 h-12 w-12 text-muted-foreground" />
+				<p class="text-muted-foreground">No books in your library yet</p>
+				<p class="text-sm text-muted-foreground mt-1">Import an EPUB or add from available books below</p>
+			</div>
+		{/if}
+		
+		<!-- Available Books Section (other users' books with EPUB data) -->
+		{#if !spectateStore.isSpectating && otherBooks.length > 0}
+			<div class="mt-10">
+				<button
+					onclick={() => showOtherBooks = !showOtherBooks}
+					class="flex items-center gap-2 text-lg font-semibold text-muted-foreground hover:text-foreground transition-colors mb-4"
+				>
+					<FolderOpen class="h-5 w-5" />
+					<span>Available on This Device</span>
+					<span class="text-sm font-normal">({otherBooks.length})</span>
+					<span class="text-xs ml-2">{showOtherBooks ? '▼' : '▶'}</span>
+				</button>
+				
+				{#if showOtherBooks}
+					<p class="text-sm text-muted-foreground mb-4">
+						These books have EPUB data stored locally from other accounts. Add them to your library to read.
+					</p>
+					<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+						{#each otherBooks as book (book.id)}
+							<BookCard {book} showAdoptButton={true} onAdopt={() => loadOtherBooks()} />
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 
 	<!-- Drag overlay -->

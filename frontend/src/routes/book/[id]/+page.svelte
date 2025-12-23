@@ -6,7 +6,7 @@
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
-	import { getEpubData } from '$lib/services/storageService';
+	import { getEpubData, getEpubDataBySha256 } from '$lib/services/storageService';
 	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
 	import type { TocItem, LocationInfo, AnnotationColor, AnnotationLocal, AnnotationDisplay } from '$lib/types';
 	import { AppError, ERROR_MESSAGES, getAnnotationKey } from '$lib/types';
@@ -217,7 +217,14 @@
 		}
 
 		try {
-			const epubData = await getEpubData(foundBook.id);
+			// Try to get EPUB data by book ID first, then fall back to sha256 lookup
+			// (sha256 lookup is needed for "adopted" books that share EPUB data with another user's book)
+			let epubData = await getEpubData(foundBook.id);
+			if (!epubData && foundBook.hasEpubData) {
+				// Book claims to have EPUB data but we didn't find it by ID
+				// Try looking up by sha256 (for adopted books)
+				epubData = await getEpubDataBySha256(foundBook.sha256);
+			}
 			if (!epubData) {
 				// Ghost book - no EPUB data, but we can still show annotations
 				isGhostBook = true;
@@ -268,7 +275,7 @@
 			// Track location changes
 			epubService.onRelocated((location) => {
 				currentLocation = location;
-				books.updateProgress(foundBook.id, location.page, location.cfi);
+				books.updateProgress(foundBook.id, location.page, location.cfi, location.totalPages);
 			});
 
 			// Get initial location
