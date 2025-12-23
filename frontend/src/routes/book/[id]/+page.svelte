@@ -5,11 +5,12 @@
 	import { mode } from 'mode-watcher';
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
-	import { getEpubData } from '$lib/services/storageService';
+	import { spectateStore } from '$lib/stores/spectate.svelte';
+	import { getEpubData, getEpubDataBySha256 } from '$lib/services/storageService';
 	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
 	import type { TocItem, LocationInfo, AnnotationColor, AnnotationLocal, AnnotationDisplay } from '$lib/types';
 	import { AppError, ERROR_MESSAGES, getAnnotationKey } from '$lib/types';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader2, Binoculars } from '@lucide/svelte';
 	import {
 		ReaderHeader,
 		ReaderControls,
@@ -24,8 +25,10 @@
 	import { cyphertap, isUserMenuOpen } from 'cyphertap';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { getThreads } from '$lib/services/langgraph';
+	
+	// Check if we're in spectate mode (view-only)
+	const isSpectating = $derived(spectateStore.isSpectating);
 
 	const bookId = $derived($page.params.id);
 	const book = $derived($books.find((b) => b.id === bookId));
@@ -44,6 +47,7 @@
 	let isLoading = $state(true);
 	let loadError = $state<string | null>(null);
 	let errorCode = $state<string | null>(null);
+	let isGhostBook = $state(false);
 	let toc = $state<TocItem[]>([]);
 	let currentLocation = $state<LocationInfo | null>(null);
 	let isBookReady = $state(false);
@@ -84,20 +88,23 @@
 	$effect(() => {
 		if (cyphertap.isLoggedIn) {
 			annotations.setCyphertap(cyphertap);
+			books.setCyphertap(cyphertap);
 			syncStore.setCyphertap(cyphertap);
 			syncStore.setMergeCallback(annotations.mergeFromNostr);
+			syncStore.setBookMergeCallback(books.mergeFromNostr);
 		} else {
 			annotations.setCyphertap(null);
+			books.setCyphertap(null);
 			syncStore.setCyphertap(null);
 		}
 	});
 
-	// Auto-sync on login if auto-publish is enabled
+	// Auto-sync on login if current book is public
 	let hasSyncedOnLogin = $state(false);
 	$effect(() => {
-		if (cyphertap.isLoggedIn && settingsStore.autoPublishAnnotations && !hasSyncedOnLogin && isBookReady) {
+		if (cyphertap.isLoggedIn && book?.isPublic && !hasSyncedOnLogin && isBookReady) {
 			hasSyncedOnLogin = true;
-			console.log('[Reader] Auto-syncing annotations on login...');
+			console.log('[Reader] Auto-syncing for public book on login...');
 			syncStore.sync();
 		}
 	});
@@ -191,8 +198,12 @@
 		setReadingMode(true);
 
 		// Ensure stores are initialized before checking for book
-		await books.initialize();
-		await annotations.initialize();
+		// Priority: spectate target > logged-in user > none
+		const userPubkey = spectateStore.isSpectating && spectateStore.target
+			? spectateStore.target.pubkey
+			: (cyphertap.isLoggedIn ? cyphertap.getUserHex() : undefined);
+		await books.initialize(userPubkey || undefined);
+		await annotations.initialize(userPubkey || undefined);
 
 		// Re-check for book after initialization
 		const currentBooks = $books;
@@ -206,10 +217,17 @@
 		}
 
 		try {
-			const epubData = await getEpubData(foundBook.id);
+			// Try to get EPUB data by book ID first, then fall back to sha256 lookup
+			// (sha256 lookup is needed for "adopted" books that share EPUB data with another user's book)
+			let epubData = await getEpubData(foundBook.id);
+			if (!epubData && foundBook.hasEpubData) {
+				// Book claims to have EPUB data but we didn't find it by ID
+				// Try looking up by sha256 (for adopted books)
+				epubData = await getEpubDataBySha256(foundBook.sha256);
+			}
 			if (!epubData) {
-				loadError = ERROR_MESSAGES.EPUB_NOT_FOUND;
-				errorCode = 'EPUB_NOT_FOUND';
+				// Ghost book - no EPUB data, but we can still show annotations
+				isGhostBook = true;
 				isLoading = false;
 				return;
 			}
@@ -257,14 +275,19 @@
 			// Track location changes
 			epubService.onRelocated((location) => {
 				currentLocation = location;
-				books.updateProgress(foundBook.id, location.page, location.cfi);
+				books.updateProgress(foundBook.id, location.page, location.cfi, location.totalPages);
 			});
 
 			// Get initial location
 			currentLocation = epubService.getCurrentLocation();
 
-			// Handle text selection
+			// Handle text selection (disabled in spectate mode)
 			epubService.onTextSelected((selection) => {
+				if (isSpectating) {
+					// In spectate mode, don't show annotation popup for new selections
+					textSelection = null;
+					return;
+				}
 				textSelection = selection;
 				// Close edit popup when making new selection
 				if (selection) {
@@ -272,7 +295,7 @@
 				}
 			});
 
-			// Handle highlight clicks for editing
+			// Handle highlight clicks for viewing/editing
 			epubService.onHighlightClicked((event) => {
 				if (event) {
 					editingAnnotation = event;
@@ -289,6 +312,11 @@
 				editingAnnotation = null;
 				// Close CypherTap popover
 				isUserMenuOpen.set(false);
+			});
+
+			// Handle page turns from within iframe (keyboard events captured by epub)
+			epubService.onPageTurn(() => {
+				handlePopupClose();
 			});
 
 			// Update location and chapter positions when accurate locations become available
@@ -362,12 +390,17 @@
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.key === 'ArrowLeft') {
 			handlePrevPage();
+			// Close popup on page turn
+			handlePopupClose();
 		} else if (event.key === 'ArrowRight') {
 			handleNextPage();
+			// Close popup on page turn
+			handlePopupClose();
 		} else if (event.key === 'Escape') {
 			showTOC = false;
 			showAnnotations = false;
 			showSettings = false;
+			handlePopupClose();
 		}
 	}
 
@@ -390,10 +423,10 @@
 		}
 	}
 
-	function deleteAnnotation(bookSha256: string, cfiRange: string): void {
+	async function deleteAnnotation(bookSha256: string, cfiRange: string): Promise<void> {
 		if (book) {
 			epubService.removeHighlight(cfiRange);
-			annotations.remove(bookSha256, cfiRange);
+			await annotations.remove(bookSha256, cfiRange);
 		}
 	}
 
@@ -403,9 +436,10 @@
 	}
 
 	// Composable annotation save data type (no legacy fields)
+	// Note: null means "clear this field", undefined means "don't change"
 	interface AnnotationSaveData {
 		highlightColor?: AnnotationColor | null;
-		note?: string;
+		note?: string | null;
 		chatThreadId?: string;
 	}
 
@@ -528,6 +562,83 @@
 			Back to Library
 		</button>
 	</div>
+{:else if isGhostBook && book}
+	<!-- Ghost Book View - No EPUB data, show annotations only -->
+	<div class="flex h-[calc(100vh-3.5rem)] flex-col">
+		<ReaderHeader
+			title={book.title}
+			{showTOC}
+			{showAnnotations}
+			{showAIChat}
+			{showSettings}
+			onToggleTOC={() => {}}
+			onToggleAnnotations={() => showAnnotations = !showAnnotations}
+			onToggleAIChat={() => {}}
+			onToggleSettings={() => showSettings = !showSettings}
+		/>
+		
+		<div class="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
+			<div class="flex flex-col items-center gap-4">
+				{#if book.coverBase64}
+					<img 
+						src="data:image/jpeg;base64,{book.coverBase64}" 
+						alt="{book.title} cover"
+						class="h-48 w-auto rounded-lg shadow-lg opacity-50"
+					/>
+				{/if}
+				<div class="space-y-2">
+					<h2 class="text-2xl font-bold text-muted-foreground">{book.title}</h2>
+					<p class="text-muted-foreground">{book.author}</p>
+				</div>
+			</div>
+			
+			<div class="max-w-md space-y-4">
+				<div class="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+					<p class="text-sm text-amber-600 dark:text-amber-400">
+						This is a <strong>ghost book</strong> — synced from Nostr but missing the EPUB file.
+					</p>
+				</div>
+				
+				<p class="text-sm text-muted-foreground">
+					{#if bookAnnotations.length > 0}
+						You have <strong>{bookAnnotations.length}</strong> annotation{bookAnnotations.length === 1 ? '' : 's'} for this book.
+						Upload the EPUB to read and see them in context.
+					{:else}
+						No annotations yet. Upload the EPUB to start reading.
+					{/if}
+				</p>
+				
+				<div class="flex justify-center gap-3">
+					<button
+						onclick={() => showAnnotations = true}
+						class="rounded-md border border-border px-4 py-2 text-sm hover:bg-accent"
+						disabled={bookAnnotations.length === 0}
+					>
+						View Annotations ({bookAnnotations.length})
+					</button>
+					<button
+						onclick={() => goto('/')}
+						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+					>
+						Back to Library
+					</button>
+				</div>
+			</div>
+		</div>
+		
+		{#if showAnnotations}
+			<AnnotationsPanel
+				annotations={bookAnnotations}
+				onClose={() => (showAnnotations = false)}
+				onDelete={(a) => deleteAnnotation(a.bookSha256, a.cfiRange)}
+				onNavigate={() => {}}
+			/>
+		{/if}
+		
+		{#if showSettings}
+			<SettingsPanel onClose={() => (showSettings = false)} />
+		{/if}
+	</div>
 {:else if !book}
 	<div class="flex h-[calc(100vh-3.5rem)] items-center justify-center">
 		<p class="text-muted-foreground">Book not found</p>
@@ -604,6 +715,7 @@
 				onDelete={handleAnnotationDelete}
 				onClose={handlePopupClose}
 				onOpenAIChat={handleOpenAIChat}
+				readOnly={isSpectating}
 			/>
 		{/if}
 

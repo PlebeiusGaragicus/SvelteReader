@@ -7,8 +7,10 @@
 	let showPopover = $state(false);
 	let containerElement: HTMLDivElement;
 
-	// Use CypherTap's reactive login state directly
+	// Use CypherTap's reactive state directly
+	// isLoggedIn = user exists, isReady = fully initialized (NDK + wallet ready)
 	const isLoggedIn = $derived(cyphertap.isLoggedIn);
+	const isReady = $derived(cyphertap.isReady);
 
 	function formatTime(timestamp: number | null): string {
 		if (!timestamp) return 'Never';
@@ -65,8 +67,12 @@
 			<Check class="h-5 w-5 text-green-500" />
 		{:else if syncStore.status === 'error'}
 			<AlertCircle class="h-5 w-5 text-red-500" />
-		{:else if isLoggedIn}
+		{:else if isReady}
+			<!-- Fully ready: NDK connected + wallet initialized -->
 			<Cloud class="h-5 w-5 text-green-500" />
+		{:else if isLoggedIn}
+			<!-- Logged in but still initializing (wallet loading, etc.) -->
+			<RefreshCw class="h-5 w-5 animate-spin text-muted-foreground" />
 		{:else}
 			<CloudOff class="h-5 w-5 text-muted-foreground" />
 		{/if}
@@ -79,10 +85,15 @@
 			<div class="p-4 space-y-3">
 				<div class="flex items-center justify-between">
 					<h3 class="font-medium text-sm">Nostr Sync</h3>
-					{#if isLoggedIn}
+					{#if isReady}
 						<span class="text-xs text-green-500 flex items-center gap-1">
 							<span class="h-2 w-2 rounded-full bg-green-500"></span>
 							Connected
+						</span>
+					{:else if isLoggedIn}
+						<span class="text-xs text-yellow-500 flex items-center gap-1">
+							<span class="h-2 w-2 rounded-full bg-yellow-500 animate-pulse"></span>
+							Initializing...
 						</span>
 					{:else}
 						<span class="text-xs text-muted-foreground flex items-center gap-1">
@@ -99,13 +110,23 @@
 							<span>{formatTime(syncStore.stats.lastSyncAt)}</span>
 						</div>
 						<div class="flex justify-between">
-							<span>Fetched:</span>
-							<span>{syncStore.stats.fetchedCount} annotations</span>
+							<span>Books:</span>
+							<span>{syncStore.stats.booksFetchedCount} synced</span>
 						</div>
+						<div class="flex justify-between">
+							<span>Annotations:</span>
+							<span>{syncStore.stats.fetchedCount} synced</span>
+						</div>
+						{#if syncStore.stats.ghostBooksCreated > 0}
+							<div class="flex justify-between text-amber-500">
+								<span>Ghost books:</span>
+								<span>{syncStore.stats.ghostBooksCreated}</span>
+							</div>
+						{/if}
 						{#if syncStore.stats.mergedCount > 0}
 							<div class="flex justify-between">
-								<span>Merged:</span>
-								<span>{syncStore.stats.mergedCount} new</span>
+								<span>New items:</span>
+								<span>{syncStore.stats.mergedCount + syncStore.stats.booksMergedCount}</span>
 							</div>
 						{/if}
 					</div>

@@ -48,7 +48,9 @@ class EpubService {
 	private selectionCallback: ((selection: TextSelection | null) => void) | null = null;
 	private highlightClickCallback: ((event: HighlightClickEvent | null) => void) | null = null;
 	private contentClickCallback: (() => void) | null = null;
+	private pageTurnCallback: (() => void) | null = null;
 	private loadedAnnotations: AnnotationLocal[] = [];
+	private renderedListenerAttached: boolean = false;
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
 		const book = ePub(arrayBuffer);
@@ -185,8 +187,12 @@ class EpubService {
 		this.rendition.on('keyup', (event: KeyboardEvent) => {
 			if (event.key === 'ArrowLeft') {
 				this.prevPage();
+				this.pageTurnCallback?.();
 			} else if (event.key === 'ArrowRight') {
 				this.nextPage();
+				this.pageTurnCallback?.();
+			} else if (event.key === 'Escape') {
+				this.pageTurnCallback?.();
 			}
 		});
 
@@ -540,6 +546,10 @@ class EpubService {
 		this.contentClickCallback = callback;
 	}
 
+	onPageTurn(callback: () => void): void {
+		this.pageTurnCallback = callback;
+	}
+
 	clearSelection(): void {
 		const contents = this.rendition?.getContents() as any;
 		if (contents && contents[0]) {
@@ -551,10 +561,20 @@ class EpubService {
 	addHighlight(annotation: AnnotationLocal): void {
 		if (!this.rendition) return;
 
+		// First, remove any existing highlight at this cfiRange to prevent duplicates
+		try {
+			this.rendition.annotations.remove(annotation.cfiRange, 'highlight');
+		} catch (e) {
+			// Ignore errors if highlight doesn't exist
+		}
+
 		const className = this.getHighlightClassNameFromAnnotation(annotation);
 		
 		// Track this annotation for style re-injection on page changes
-		if (!this.loadedAnnotations.find(a => a.cfiRange === annotation.cfiRange)) {
+		const existingIndex = this.loadedAnnotations.findIndex(a => a.cfiRange === annotation.cfiRange);
+		if (existingIndex >= 0) {
+			this.loadedAnnotations[existingIndex] = annotation;
+		} else {
 			this.loadedAnnotations.push(annotation);
 		}
 		
@@ -565,7 +585,6 @@ class EpubService {
 		// epub.js passes the DOM event directly to the callback
 		const clickHandler = (e: MouseEvent) => {
 			if (!this.highlightClickCallback) return;
-			
 			
 			// Get the clicked SVG element's position in the main viewport
 			const target = e.target as SVGElement;
@@ -625,14 +644,30 @@ class EpubService {
 	loadAnnotations(annotations: AnnotationLocal[]): void {
 		if (!this.rendition) return;
 		
-		// Store annotations for re-injection on page changes
-		this.loadedAnnotations = annotations;
-		
-		// Re-inject styles when content changes (new chapter/page loaded)
-		this.rendition.on('rendered', () => {
-			this.reinjectAllHighlightStyles();
+		// Clear existing highlights that are no longer in the new annotations list
+		const newCfiRanges = new Set(annotations.map(a => a.cfiRange));
+		this.loadedAnnotations.forEach((existing) => {
+			if (!newCfiRanges.has(existing.cfiRange)) {
+				try {
+					this.rendition?.annotations.remove(existing.cfiRange, 'highlight');
+				} catch (e) {
+					// Ignore errors if highlight doesn't exist
+				}
+			}
 		});
 		
+		// Store annotations for re-injection on page changes
+		this.loadedAnnotations = [...annotations];
+		
+		// Only attach the rendered listener once to prevent accumulation
+		if (!this.renderedListenerAttached) {
+			this.renderedListenerAttached = true;
+			this.rendition.on('rendered', () => {
+				this.reinjectAllHighlightStyles();
+			});
+		}
+		
+		// Add annotations (addHighlight removes existing first to prevent duplicates)
 		annotations.forEach((annotation) => {
 			this.addHighlight(annotation);
 		});
@@ -656,6 +691,8 @@ class EpubService {
 			// Has visible highlight - use color class, add chat/note indicator via border
 			if (hasChat) {
 				return `hl-${displayColor}-chat`;
+			} else if (hasNote) {
+				return `hl-${displayColor}-note`;
 			}
 			return `hl-${displayColor}`;
 		} else if (hasChat) {
@@ -687,19 +724,25 @@ class EpubService {
 				'fill-opacity': '0.4',
 				'mix-blend-mode': 'multiply'
 			};
-			// Add blue border if also has chat
+			// Add blue dashed outline if also has chat (takes priority)
 			if (hasChat) {
 				baseStyle['stroke'] = 'rgb(33, 150, 243)';
 				baseStyle['stroke-width'] = '2';
+				baseStyle['stroke-dasharray'] = '4,2';
+			} else if (hasNote) {
+				// Add green dashed outline if has note (but no chat)
+				baseStyle['stroke'] = 'rgb(76, 175, 80)';
+				baseStyle['stroke-width'] = '2';
+				baseStyle['stroke-dasharray'] = '4,2';
 			}
 			return baseStyle;
 		}
 		
-		// No highlight color - show as underline based on chat/note
+		// No highlight color - show as dashed outline based on chat/note
 		if (hasChat) {
 			return {
-				'fill': 'rgba(33, 150, 243, 0.2)',
-				'fill-opacity': '0.2',
+				'fill': 'rgba(33, 150, 243, 0.1)',
+				'fill-opacity': '0.1',
 				'mix-blend-mode': 'multiply',
 				'stroke': 'rgb(33, 150, 243)',
 				'stroke-width': '2',
@@ -709,8 +752,8 @@ class EpubService {
 		
 		if (hasNote) {
 			return {
-				'fill': 'rgba(76, 175, 80, 0.2)',
-				'fill-opacity': '0.2',
+				'fill': 'rgba(76, 175, 80, 0.1)',
+				'fill-opacity': '0.1',
 				'mix-blend-mode': 'multiply',
 				'stroke': 'rgb(76, 175, 80)',
 				'stroke-width': '2',
@@ -754,15 +797,20 @@ class EpubService {
 		let css = '';
 		if (displayColor) {
 			if (hasChat) {
-				// Highlight with chat indicator border
-				css = `.${className} { background-color: ${colorMap[displayColor]} !important; border-bottom: 2px solid rgb(33, 150, 243) !important; border-radius: 2px !important; }`;
+				// Highlight with chat: dashed blue outline
+				css = `.${className} { background-color: ${colorMap[displayColor]} !important; outline: 2px dashed rgb(33, 150, 243) !important; outline-offset: -1px !important; border-radius: 2px !important; }`;
+			} else if (hasNote) {
+				// Highlight with note: dashed green outline
+				css = `.${className} { background-color: ${colorMap[displayColor]} !important; outline: 2px dashed rgb(76, 175, 80) !important; outline-offset: -1px !important; border-radius: 2px !important; }`;
 			} else {
 				css = `.${className} { background-color: ${colorMap[displayColor]} !important; border-radius: 2px !important; }`;
 			}
 		} else if (hasChat) {
-			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(33, 150, 243) !important; border-radius: 0 !important; }`;
+			// No highlight, just chat: dashed blue outline
+			css = `.${className} { background-color: transparent !important; outline: 2px dashed rgb(33, 150, 243) !important; outline-offset: -1px !important; border-radius: 2px !important; }`;
 		} else if (hasNote) {
-			css = `.${className} { background-color: transparent !important; border-bottom: 2px solid rgb(76, 175, 80) !important; border-radius: 0 !important; }`;
+			// No highlight, just note: dashed green outline
+			css = `.${className} { background-color: transparent !important; outline: 2px dashed rgb(76, 175, 80) !important; outline-offset: -1px !important; border-radius: 2px !important; }`;
 		} else {
 			// Fallback - should not happen with new model
 			css = `.${className} { background-color: rgba(255, 235, 59, 0.5) !important; border-radius: 2px !important; }`;
@@ -825,6 +873,7 @@ class EpubService {
 		this.locationsReady = false;
 		this.onLocationsReady = null;
 		this.loadedAnnotations = [];
+		this.renderedListenerAttached = false;
 	}
 }
 

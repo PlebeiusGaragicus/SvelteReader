@@ -18,12 +18,19 @@ export interface BookIdentity {
 export interface BookLocal {
 	id: string;                  // Local UUID (IndexedDB key for epubs store)
 	sha256: string;              // Links to BookIdentity + Annotations
+	ownerPubkey: string;         // Nostr pubkey (hex) of the user who owns this book
 	progress: number;            // 0-100
 	currentPage: number;
 	totalPages: number;
 	currentCfi?: string;
 	hasEpubData: boolean;        // false = "ghost book" (annotations only)
-	defaultPublishAnnotations?: boolean;
+	
+	// Nostr sync state
+	isPublic?: boolean;          // true = sync book & annotations to Nostr
+	nostrEventId?: string;       // Book announcement event ID
+	nostrCreatedAt?: number;     // Event created_at for LWW
+	relays?: string[];           // Relay URLs where published
+	syncPending?: boolean;       // Local changes not yet published
 }
 
 // Combined book type for runtime use
@@ -41,6 +48,7 @@ export interface Annotation {
 	bookSha256: string;                      // Links to book by content hash
 	cfiRange: string;                        // EPUB CFI location
 	text: string;                            // Selected text
+	ownerPubkey: string;                     // Nostr pubkey (hex) of the user who owns this
 	highlightColor?: AnnotationColor | null; // null = explicitly no highlight
 	note?: string;                           // User's note
 	createdAt: number;                       // Unix timestamp (ms)

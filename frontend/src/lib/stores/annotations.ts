@@ -5,7 +5,8 @@ import {
 	getAnnotationsByBook,
 	getAllAnnotations,
 	deleteAnnotation as deleteAnnotationFromDB,
-	deleteAnnotationsByBook
+	deleteAnnotationsByBook,
+	getBookBySha256
 } from '$lib/services/storageService';
 import {
 	publishAnnotation,
@@ -13,7 +14,6 @@ import {
 	type CyphertapPublisher
 } from '$lib/services/nostrService';
 import type { Annotation } from '$lib/types';
-import { settingsStore } from '$lib/stores/settings.svelte';
 import {
 	type AnnotationLocal,
 	type AnnotationColor,
@@ -27,6 +27,7 @@ const { subscribe, set, update } = writable<AnnotationLocal[]>([]);
 
 // Track if store has been initialized from IndexedDB
 let initialized = false;
+let currentOwnerPubkey: string | null = null;
 
 // CypherTap instance for Nostr publishing
 let cyphertapInstance: CyphertapPublisher | null = null;
@@ -37,13 +38,24 @@ function setCyphertap(cyphertap: CyphertapPublisher | null): void {
 	cyphertapInstance = cyphertap;
 }
 
-// Initialize store from IndexedDB
-async function initializeStore(): Promise<void> {
-	if (!browser || initialized) return;
+// Initialize store from IndexedDB for a specific user
+async function initializeStore(ownerPubkey?: string): Promise<void> {
+	if (!browser) return;
+	
+	// If owner changed, reinitialize
+	if (initialized && ownerPubkey === currentOwnerPubkey) return;
 	
 	try {
-		const annotations = await getAllAnnotations();
-		set(annotations);
+		currentOwnerPubkey = ownerPubkey || null;
+		if (ownerPubkey) {
+			const annotations = await getAllAnnotations(ownerPubkey);
+			set(annotations);
+			console.log(`[Annotations] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${annotations.length} annotations`);
+		} else {
+			// No user logged in - empty annotations
+			set([]);
+			console.log('[Annotations] No user logged in, annotations empty');
+		}
 		initialized = true;
 	} catch (e) {
 		console.error('Failed to initialize annotations store:', e);
@@ -71,13 +83,20 @@ async function upsertAnnotation(
 		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
 	);
 	
+	// Require user to be logged in
+	if (!currentOwnerPubkey) {
+		throw new Error('Cannot create annotation: no user logged in');
+	}
+	
 	// Build plain object to avoid reactive proxy issues with IndexedDB
 	let annotation: AnnotationLocal = {
 		bookSha256,
 		cfiRange,
 		text: data.text ?? existing?.text ?? '',
+		ownerPubkey: existing?.ownerPubkey ?? currentOwnerPubkey,
 		highlightColor: data.highlightColor !== undefined ? data.highlightColor : existing?.highlightColor,
-		note: data.note !== undefined ? data.note : existing?.note,
+		// null means "clear the note", undefined means "don't change"
+		note: data.note === null ? undefined : (data.note !== undefined ? data.note : existing?.note),
 		createdAt: existing?.createdAt ?? Date.now(),
 		// Ensure chatThreadIds is a plain array copy
 		chatThreadIds: data.chatThreadIds 
@@ -96,9 +115,10 @@ async function upsertAnnotation(
 	// Persist to IndexedDB
 	await storeAnnotation(annotation);
 	
-	// Auto-publish to Nostr if enabled and logged in
-	if (settingsStore.autoPublishAnnotations && cyphertapInstance?.isLoggedIn) {
-		console.log(`[Annotations] Auto-publishing annotation: ${key.slice(0, 30)}...`);
+	// Auto-publish to Nostr if book is public and logged in
+	const book = await getBookBySha256(bookSha256);
+	if (book?.isPublic && cyphertapInstance?.isLoggedIn) {
+		console.log(`[Annotations] Auto-publishing annotation for public book: ${key.slice(0, 30)}...`);
 		const result = await publishAnnotation(annotation, cyphertapInstance);
 		if (result.success) {
 			// Update annotation with Nostr sync state
@@ -118,8 +138,8 @@ async function upsertAnnotation(
 			await storeAnnotation(annotation);
 			console.warn('[Annotations] ✗ Failed to publish annotation to Nostr:', result.error);
 		}
-	} else if (!settingsStore.autoPublishAnnotations) {
-		console.log(`[Annotations] Auto-publish disabled, skipping Nostr sync`);
+	} else if (!book?.isPublic) {
+		console.log(`[Annotations] Book is local-only, skipping Nostr sync`);
 	}
 	
 	// Update in-memory store
@@ -150,17 +170,19 @@ async function removeAnnotation(bookSha256: string, cfiRange: string): Promise<v
 	
 	await deleteAnnotationFromDB(bookSha256, cfiRange);
 	
-	// Publish deletion to Nostr if the annotation was previously published
-	if (existing?.nostrEventId && cyphertapInstance?.isLoggedIn) {
-		const result = await publishAnnotationDeletion(bookSha256, cfiRange, cyphertapInstance);
-		if (!result.success) {
-			console.warn('Failed to publish annotation deletion to Nostr:', result.error);
-		}
-	}
-	
+	// Update store immediately (optimistic update) so UI reflects deletion right away
 	update(annotations =>
 		annotations.filter(a => !(a.bookSha256 === bookSha256 && a.cfiRange === cfiRange))
 	);
+	
+	// Publish deletion to Nostr in background if the annotation was previously published
+	if (existing?.nostrEventId && cyphertapInstance?.isLoggedIn) {
+		publishAnnotationDeletion(bookSha256, cfiRange, cyphertapInstance).then(result => {
+			if (!result.success) {
+				console.warn('Failed to publish annotation deletion to Nostr:', result.error);
+			}
+		});
+	}
 }
 
 // Remove all annotations for a book
@@ -252,9 +274,14 @@ async function mergeFromNostr(remoteAnnotations: Annotation[]): Promise<{ merged
 		
 		if (!local) {
 			// New annotation from Nostr - add it
+			if (!currentOwnerPubkey) {
+				console.warn('[Annotations] Cannot merge annotation: no user logged in');
+				continue;
+			}
 			console.log(`[Annotations]   + New: ${key.slice(0, 30)}...`);
 			const newAnnotation: AnnotationLocal = {
 				...remote,
+				ownerPubkey: remote.ownerPubkey || currentOwnerPubkey,
 				nostrEventId: remote.nostrEventId,
 				nostrCreatedAt: remote.nostrCreatedAt,
 				syncPending: false,

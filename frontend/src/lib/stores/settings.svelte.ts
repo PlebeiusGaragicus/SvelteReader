@@ -1,9 +1,8 @@
 /**
  * Settings Store - Reactive store for app settings with localStorage persistence
  * 
- * Provides:
- * - Auto-publish annotations toggle (default: true)
- * - Persisted to localStorage
+ * Note: Annotation publishing is controlled per-book via book.isPublic.
+ * This store is reserved for future reader settings (font size, theme, etc.)
  */
 
 import { browser } from '$app/environment';
@@ -11,12 +10,10 @@ import { browser } from '$app/environment';
 const STORAGE_KEY = 'sveltereader-settings';
 
 interface Settings {
-	autoPublishAnnotations: boolean;
+	// Reserved for future settings (font size, theme, etc.)
 }
 
-const DEFAULT_SETTINGS: Settings = {
-	autoPublishAnnotations: true,
-};
+const DEFAULT_SETTINGS: Settings = {};
 
 function loadSettings(): Settings {
 	if (!browser) return DEFAULT_SETTINGS;
@@ -43,24 +40,15 @@ function saveSettings(settings: Settings): void {
 }
 
 function createSettingsStore() {
-	let autoPublishAnnotations = $state(DEFAULT_SETTINGS.autoPublishAnnotations);
 	let initialized = false;
 
 	function initialize(): void {
 		if (initialized || !browser) return;
-		
-		const loaded = loadSettings();
-		autoPublishAnnotations = loaded.autoPublishAnnotations;
+		loadSettings();
 		initialized = true;
 	}
 
-	function setAutoPublishAnnotations(value: boolean): void {
-		autoPublishAnnotations = value;
-		saveSettings({ autoPublishAnnotations });
-	}
-
 	function reset(): void {
-		autoPublishAnnotations = DEFAULT_SETTINGS.autoPublishAnnotations;
 		saveSettings(DEFAULT_SETTINGS);
 	}
 
@@ -70,9 +58,6 @@ function createSettingsStore() {
 	}
 
 	return {
-		get autoPublishAnnotations() { return autoPublishAnnotations; },
-		
-		setAutoPublishAnnotations,
 		initialize,
 		reset,
 	};

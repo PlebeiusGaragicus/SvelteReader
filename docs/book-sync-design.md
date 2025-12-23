@@ -27,12 +27,12 @@ Show "Book Announcement" modal
 If "Publish":
   - Create addressable book event (kind 30801)
   - Set book.isPublic = true
-  - Future annotations auto-publish
+  - All annotations for this book auto-publish to Nostr
         ↓
 If "Local Only":
   - No Nostr event created
   - book.isPublic = false
-  - Annotations stay local by default
+  - All annotations for this book stay local
 ```
 
 ### 2. Sync & Ghost Books
@@ -254,20 +254,23 @@ Update `SyncStatusButton` popover:
 └─────────────────────────────────┘
 ```
 
-### 4. Book Settings Panel
+### 4. Settings Panel
 
-Add sync settings per book:
+The global settings panel now shows informational text about per-book sync:
 
 ```
 ┌─────────────────────────────────┐
-│  Book Settings                  │
+│  Settings                       │
 ├─────────────────────────────────┤
-│  Sync Status                    │
-│  ☑ Publish annotations          │
-│    (Changes sync to Nostr)      │
+│  ℹ️ Nostr Sync                   │
 │                                 │
-│  [Edit Book Metadata]           │
-│  [Republish Book]               │
+│  Annotation syncing is          │
+│  controlled per-book. Choose    │
+│  "Publish to Nostr" or "Local   │
+│  Only" when importing a book.   │
+│                                 │
+│  Change via book card menu →    │
+│  "Edit Metadata"                │
 └─────────────────────────────────┘
 ```
 

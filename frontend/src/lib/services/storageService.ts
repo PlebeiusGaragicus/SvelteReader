@@ -14,17 +14,23 @@ interface SvelteReaderDB extends DBSchema {
 	books: {
 		key: string;
 		value: Book;
-		indexes: { 'by-sha256': string };
+		indexes: { 
+			'by-sha256': string;
+			'by-owner': string;
+		};
 	};
 	annotations: {
 		key: string;
 		value: AnnotationLocal;
-		indexes: { 'by-book': string };
+		indexes: { 
+			'by-book': string;
+			'by-owner': string;
+		};
 	};
 }
 
 const DB_NAME = 'sveltereader';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<SvelteReaderDB>> | null = null;
 
@@ -35,7 +41,7 @@ function getDB(): Promise<IDBPDatabase<SvelteReaderDB>> {
 
 	if (!dbPromise) {
 		dbPromise = openDB<SvelteReaderDB>(DB_NAME, DB_VERSION, {
-			upgrade(db, oldVersion) {
+			upgrade(db, oldVersion, _newVersion, transaction) {
 				// Version 1: epubs and locations
 				if (!db.objectStoreNames.contains('epubs')) {
 					db.createObjectStore('epubs');
@@ -53,6 +59,18 @@ function getDB(): Promise<IDBPDatabase<SvelteReaderDB>> {
 					if (!db.objectStoreNames.contains('annotations')) {
 						const annotationsStore = db.createObjectStore('annotations');
 						annotationsStore.createIndex('by-book', 'bookSha256', { unique: false });
+					}
+				}
+				
+				// Version 3: add ownerPubkey indexes for user scoping
+				if (oldVersion < 3) {
+					const booksStore = transaction.objectStore('books');
+					if (!booksStore.indexNames.contains('by-owner')) {
+						booksStore.createIndex('by-owner', 'ownerPubkey', { unique: false });
+					}
+					const annotationsStore = transaction.objectStore('annotations');
+					if (!annotationsStore.indexNames.contains('by-owner')) {
+						annotationsStore.createIndex('by-owner', 'ownerPubkey', { unique: false });
 					}
 				}
 			}
@@ -87,6 +105,33 @@ export async function getEpubData(bookId: string): Promise<ArrayBuffer | null> {
 		return data ?? null;
 	} catch (e) {
 		console.error('Failed to get EPUB data:', e);
+		throw new AppError(
+			'Failed to retrieve book data from storage.',
+			'STORAGE_READ_FAILED',
+			true
+		);
+	}
+}
+
+export async function getEpubDataBySha256(sha256: string): Promise<ArrayBuffer | null> {
+	if (!browser) return null;
+
+	try {
+		const db = await getDB();
+		// Find any book with this sha256 that has EPUB data
+		const books = await db.getAllFromIndex('books', 'by-sha256', sha256);
+		for (const book of books) {
+			if (book.hasEpubData) {
+				// Try to get EPUB data using this book's id
+				const data = await db.get('epubs', book.id);
+				if (data) {
+					return data;
+				}
+			}
+		}
+		return null;
+	} catch (e) {
+		console.error('Failed to get EPUB data by sha256:', e);
 		throw new AppError(
 			'Failed to retrieve book data from storage.',
 			'STORAGE_READ_FAILED',
@@ -207,16 +252,58 @@ export async function getBookBySha256(sha256: string): Promise<Book | null> {
 	}
 }
 
-export async function getAllBooks(): Promise<Book[]> {
+export async function getAllBooks(ownerPubkey?: string): Promise<Book[]> {
 	if (!browser) return [];
 
 	try {
 		const db = await getDB();
+		if (ownerPubkey) {
+			return await db.getAllFromIndex('books', 'by-owner', ownerPubkey);
+		}
+		// If no owner specified, return all (for migration/admin purposes)
 		return await db.getAll('books');
 	} catch (e) {
 		console.error('Failed to get all books:', e);
 		throw new AppError(
 			'Failed to retrieve books.',
+			'STORAGE_READ_FAILED',
+			true
+		);
+	}
+}
+
+export async function getBooksWithEpubData(excludeOwner?: string): Promise<Book[]> {
+	if (!browser) return [];
+
+	try {
+		const db = await getDB();
+		const allBooks = await db.getAll('books');
+		// Filter to books that have EPUB data and optionally exclude a specific owner
+		return allBooks.filter(book => 
+			book.hasEpubData && 
+			(!excludeOwner || book.ownerPubkey !== excludeOwner)
+		);
+	} catch (e) {
+		console.error('Failed to get books with EPUB data:', e);
+		throw new AppError(
+			'Failed to retrieve books.',
+			'STORAGE_READ_FAILED',
+			true
+		);
+	}
+}
+
+export async function getBookBySha256ForOwner(sha256: string, ownerPubkey: string): Promise<Book | null> {
+	if (!browser) return null;
+
+	try {
+		const db = await getDB();
+		const books = await db.getAllFromIndex('books', 'by-sha256', sha256);
+		return books.find(b => b.ownerPubkey === ownerPubkey) ?? null;
+	} catch (e) {
+		console.error('Failed to get book by sha256 for owner:', e);
+		throw new AppError(
+			'Failed to retrieve book data.',
 			'STORAGE_READ_FAILED',
 			true
 		);
@@ -294,11 +381,15 @@ export async function getAnnotationsByBook(bookSha256: string): Promise<Annotati
 	}
 }
 
-export async function getAllAnnotations(): Promise<AnnotationLocal[]> {
+export async function getAllAnnotations(ownerPubkey?: string): Promise<AnnotationLocal[]> {
 	if (!browser) return [];
 
 	try {
 		const db = await getDB();
+		if (ownerPubkey) {
+			return await db.getAllFromIndex('annotations', 'by-owner', ownerPubkey);
+		}
+		// If no owner specified, return all (for migration/admin purposes)
 		return await db.getAll('annotations');
 	} catch (e) {
 		console.error('Failed to get all annotations:', e);
@@ -343,6 +434,47 @@ export async function deleteAnnotationsByBook(bookSha256: string): Promise<void>
 		console.error('Failed to delete annotations by book:', e);
 		throw new AppError(
 			'Failed to delete annotations.',
+			'STORAGE_WRITE_FAILED',
+			true
+		);
+	}
+}
+
+/**
+ * Delete all books and annotations for a specific owner (used for spectate cleanup)
+ */
+export async function deleteDataByOwner(ownerPubkey: string): Promise<void> {
+	if (!browser) return;
+
+	try {
+		const db = await getDB();
+		
+		// Delete all books for this owner
+		const booksToDelete = await db.getAllFromIndex('books', 'by-owner', ownerPubkey);
+		if (booksToDelete.length > 0) {
+			const bookTx = db.transaction('books', 'readwrite');
+			for (const book of booksToDelete) {
+				await bookTx.store.delete(book.id);
+			}
+			await bookTx.done;
+			console.log(`[Storage] Deleted ${booksToDelete.length} books for owner ${ownerPubkey.slice(0, 8)}`);
+		}
+		
+		// Delete all annotations for this owner
+		const annotationsToDelete = await db.getAllFromIndex('annotations', 'by-owner', ownerPubkey);
+		if (annotationsToDelete.length > 0) {
+			const annotationTx = db.transaction('annotations', 'readwrite');
+			for (const annotation of annotationsToDelete) {
+				const key = getAnnotationKey(annotation.bookSha256, annotation.cfiRange);
+				await annotationTx.store.delete(key);
+			}
+			await annotationTx.done;
+			console.log(`[Storage] Deleted ${annotationsToDelete.length} annotations for owner ${ownerPubkey.slice(0, 8)}`);
+		}
+	} catch (e) {
+		console.error('Failed to delete data by owner:', e);
+		throw new AppError(
+			'Failed to delete user data.',
 			'STORAGE_WRITE_FAILED',
 			true
 		);
