@@ -153,6 +153,8 @@ async function executeGetChapter(
 ): Promise<ToolResult> {
 	const chapterId = args.chapter_id as string;
 	
+	console.log('[AgentTools] executeGetChapter called with:', { chapterId, args });
+	
 	if (!chapterId) {
 		return {
 			id: toolCallId,
@@ -162,7 +164,9 @@ async function executeGetChapter(
 	}
 	
 	try {
+		console.log('[AgentTools] Calling epubService.getChapterText...');
 		let text = await epubService.getChapterText(chapterId);
+		console.log('[AgentTools] Got chapter text, length:', text.length);
 		
 		// Truncate if too long
 		let truncated = false;
@@ -180,6 +184,7 @@ async function executeGetChapter(
 			result,
 		};
 	} catch (error) {
+		console.error('[AgentTools] Error in executeGetChapter:', error);
 		return {
 			id: toolCallId,
 			result: null,

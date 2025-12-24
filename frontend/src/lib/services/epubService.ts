@@ -867,50 +867,86 @@ class EpubService {
 	async getChapterText(chapterId: string): Promise<string> {
 		if (!this.book) throw new Error('No book loaded');
 		
+		console.log(`[EpubService] getChapterText called with: "${chapterId}"`);
+		
+		// Wait for spine to be loaded (critical!)
+		await this.book.loaded.spine;
+		
 		const spine = this.book.spine as any;
-		const items = spine?.items || [];
+		const items: any[] = spine?.items || [];
 		
-		// First, try to find by direct spine match
-		let item = items.find((i: any) => 
-			i.href?.includes(chapterId) || 
-			i.idref === chapterId ||
-			i.id === chapterId
-		);
+		console.log(`[EpubService] Spine has ${items.length} items`);
+		if (items.length > 0) {
+			console.log('[EpubService] First spine item:', {
+				href: items[0]?.href,
+				hasLoad: typeof items[0]?.load === 'function',
+				keys: Object.keys(items[0] || {})
+			});
+		}
 		
-		// If not found, try resolving via TOC (nav ID -> href)
-		if (!item) {
-			const tocHref = await this.resolveTocIdToHref(chapterId);
-			if (tocHref) {
-				const baseHref = tocHref.split('#')[0];
-				item = items.find((i: any) => 
-					i.href === baseHref || 
-					i.href?.endsWith(baseHref) ||
-					baseHref.endsWith(i.href)
-				);
+		// Resolve the chapterId to an href first
+		let targetHref: string | null = null;
+		
+		// Check if it's a TOC nav ID (like "np-5") - resolve via TOC
+		const tocHref = await this.resolveTocIdToHref(chapterId);
+		if (tocHref) {
+			targetHref = tocHref.split('#')[0]; // Remove fragment
+			console.log(`[EpubService] Resolved via TOC: "${chapterId}" -> "${targetHref}"`);
+		} else {
+			// Use as-is (might be an href directly)
+			targetHref = chapterId;
+			console.log(`[EpubService] Using chapterId as href: "${targetHref}"`);
+		}
+		
+		// Find the spine item by href
+		let foundIndex = -1;
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
+			const itemHref = item?.href || '';
+			
+			// Try exact match
+			if (itemHref === targetHref) {
+				foundIndex = i;
+				console.log(`[EpubService] Exact match at index ${i}: "${itemHref}"`);
+				break;
+			}
+			
+			// Try ends-with match (handle path differences)
+			if (itemHref.endsWith(targetHref) || targetHref.endsWith(itemHref)) {
+				foundIndex = i;
+				console.log(`[EpubService] EndsWith match at index ${i}: "${itemHref}" <-> "${targetHref}"`);
+				break;
+			}
+			
+			// Try filename match
+			const targetFilename = targetHref.split('/').pop();
+			const itemFilename = itemHref.split('/').pop();
+			if (targetFilename && itemFilename && targetFilename === itemFilename) {
+				foundIndex = i;
+				console.log(`[EpubService] Filename match at index ${i}: "${itemFilename}"`);
+				break;
 			}
 		}
 		
-		// Try a more lenient fuzzy search
-		if (!item) {
-			const lowerChapterId = chapterId.toLowerCase();
-			item = items.find((i: any) => 
-				i.href?.toLowerCase().includes(lowerChapterId) ||
-				i.idref?.toLowerCase().includes(lowerChapterId)
-			);
-		}
-		
-		if (!item) {
-			// Log available items for debugging
-			console.error(`[EpubService] Chapter not found: ${chapterId}`);
-			console.error(`[EpubService] Available spine items:`, items.map((i: any) => ({
-				href: i.href,
-				idref: i.idref,
-				id: i.id
-			})));
+		if (foundIndex === -1) {
+			console.error(`[EpubService] No spine item found for "${targetHref}"`);
+			console.error('[EpubService] Available hrefs:', items.slice(0, 10).map((i: any) => i?.href));
 			throw new Error(`Chapter not found: ${chapterId}`);
 		}
 		
-		return this.extractTextFromSpineItem(item);
+		// Get the href from the spine item data
+		const spineItem = items[foundIndex];
+		const chapterHref = spineItem?.href;
+		
+		console.log(`[EpubService] Found spine item at index ${foundIndex}:`, {
+			href: chapterHref
+		});
+		
+		if (!chapterHref) {
+			throw new Error(`Spine item at index ${foundIndex} has no href`);
+		}
+		
+		return this.extractTextFromHref(chapterHref);
 	}
 
 	/**
@@ -918,25 +954,63 @@ class EpubService {
 	 * TOC items have IDs like "np-5" that map to hrefs like "xhtml/chapter5.xhtml"
 	 */
 	private async resolveTocIdToHref(tocId: string): Promise<string | null> {
+		if (!this.book) return null;
+		
+		// Ensure navigation is loaded
+		await this.book.loaded.navigation;
+		
 		const toc = await this.getTableOfContentsForAgent();
+		console.log(`[EpubService] resolveTocIdToHref: looking for "${tocId}" in ${toc.length} TOC entries`);
+		console.log('[EpubService] First 5 TOC entries:', toc.slice(0, 5).map(t => ({ id: t.id, href: t.href })));
 		const entry = toc.find(item => item.id === tocId);
+		if (entry) {
+			console.log(`[EpubService] Found entry: id="${entry.id}", href="${entry.href}", hasHref=${!!entry.href}`);
+			if (!entry.href) {
+				console.error(`[EpubService] Entry found but has no href!`);
+				return null;
+			}
+		} else {
+			console.log(`[EpubService] No entry found for "${tocId}"`);
+		}
 		return entry?.href || null;
 	}
 
 	/**
-	 * Extract text content from a spine item.
+	 * Extract text content from a chapter by its href.
+	 * Uses book.section() to get a proper Section object with load() method.
 	 */
-	private async extractTextFromSpineItem(item: any): Promise<string> {
+	private async extractTextFromHref(href: string): Promise<string> {
 		if (!this.book) throw new Error('No book loaded');
 		
+		console.log('[EpubService] extractTextFromHref called with:', href);
+		
+		// Use book.section() to get a proper Section object with load() method
+		const section = this.book.section(href);
+		
+		if (!section) {
+			console.error('[EpubService] Section not found for href:', href);
+			throw new Error(`Section not found: ${href}`);
+		}
+		
+		console.log('[EpubService] Got section:', {
+			href: section.href,
+			hasLoad: typeof section.load === 'function'
+		});
+		
 		try {
-			const doc = await item.load(this.book.load.bind(this.book));
+			console.log('[EpubService] Loading section...');
+			const doc = await section.load(this.book.load.bind(this.book));
+			console.log('[EpubService] Section loaded, doc body exists:', !!doc?.body);
 			const text = doc.body?.textContent || '';
-			item.unload();
+			section.unload();
+			console.log('[EpubService] Extracted text length:', text.trim().length);
 			return text.trim();
-		} catch (e) {
-			console.error('Failed to extract text from spine item:', e);
-			throw new Error(`Failed to load chapter content`);
+		} catch (e: any) {
+			console.error('[EpubService] Failed to load section:', {
+				errorMessage: e?.message,
+				href: href
+			});
+			throw new Error(`Failed to load chapter: ${e?.message || 'unknown error'}`);
 		}
 	}
 
@@ -952,29 +1026,42 @@ class EpubService {
 	}>> {
 		if (!this.book) throw new Error('No book loaded');
 		
+		// Ensure spine is loaded
+		await this.book.loaded.spine;
+		
 		const chapters: Array<{ id: string; title: string; text: string; href: string }> = [];
 		const toc = await this.getTableOfContents();
 		const spine = this.book.spine as any;
 		const items = spine?.items || [];
 		
 		for (const item of items) {
+			const href = item?.href;
+			if (!href) continue;
+			
 			try {
-				const doc = await item.load(this.book.load.bind(this.book));
+				// Use book.section() to get a proper Section object with load() method
+				const section = this.book.section(href);
+				if (!section) {
+					console.warn(`[EpubService] No section found for href: ${href}`);
+					continue;
+				}
+				
+				const doc = await section.load(this.book.load.bind(this.book));
 				const text = doc.body?.textContent || '';
 				
 				// Find TOC entry for title
-				const tocEntry = this.findTocEntryForHref(toc, item.href);
+				const tocEntry = this.findTocEntryForHref(toc, href);
 				
 				chapters.push({
-					id: item.idref || item.id || item.href,
-					title: tocEntry?.label || this.extractTitleFromHref(item.href),
+					id: item.idref || item.id || href,
+					title: tocEntry?.label || this.extractTitleFromHref(href),
 					text: text.trim(),
-					href: item.href,
+					href: href,
 				});
 				
-				item.unload();
+				section.unload();
 			} catch (e) {
-				console.warn(`Failed to extract chapter ${item.href}:`, e);
+				console.warn(`Failed to extract chapter ${href}:`, e);
 			}
 		}
 		
