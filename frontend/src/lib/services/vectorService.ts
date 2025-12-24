@@ -3,13 +3,16 @@
  * 
  * Provides client-side embedding and vector search for books using:
  * - transformers.js: Runs embedding models in browser via WASM/WebGPU
- * - Orama: Pure JS search engine with vector support
+ * - Persistent storage in IndexedDB for "index once, use forever"
  * 
  * This enables the AI agent to search the book without sending content to a server.
  */
 
-// Note: These imports require installing the packages:
-// pnpm add @xenova/transformers @orama/orama
+import { 
+	getVectorIndex, 
+	storeVectorIndex, 
+	type StoredVectorIndex 
+} from './storageService';
 
 // Types for the vector search results
 export interface SearchResult {
@@ -114,7 +117,8 @@ export async function preloadEmbedder(): Promise<void> {
 }
 
 /**
- * Check if a book has been indexed.
+ * Check if a book has been indexed (in memory).
+ * For checking storage, use loadIndexFromStorage first.
  */
 export function isBookIndexed(bookId: string): boolean {
 	const index = bookIndexes.get(bookId);
@@ -122,7 +126,52 @@ export function isBookIndexed(bookId: string): boolean {
 }
 
 /**
+ * Try to load a book's index from persistent storage.
+ * Returns true if found and loaded, false otherwise.
+ */
+export async function loadIndexFromStorage(bookId: string): Promise<boolean> {
+	// Already in memory?
+	if (isBookIndexed(bookId)) {
+		return true;
+	}
+	
+	try {
+		const stored = await getVectorIndex(bookId);
+		if (stored && stored.chunks && stored.chunks.length > 0) {
+			// Load into memory
+			bookIndexes.set(bookId, {
+				chunks: stored.chunks,
+				ready: true,
+			});
+			console.log(`[VectorService] Loaded index from storage: ${stored.chunkCount} chunks for ${bookId.slice(0, 8)}...`);
+			return true;
+		}
+	} catch (e) {
+		console.warn('[VectorService] Failed to load index from storage:', e);
+	}
+	
+	return false;
+}
+
+/**
+ * Helper to yield to the event loop, keeping UI responsive during heavy processing.
+ * Uses a longer timeout to ensure the UI can update.
+ */
+function yieldToMain(): Promise<void> {
+	return new Promise(resolve => {
+		// Use setTimeout with a small delay to ensure the browser can render
+		// requestIdleCallback doesn't work well with CPU-intensive tasks
+		setTimeout(resolve, 10);
+	});
+}
+
+// Batch size for yielding - yield after every chunk to maximize responsiveness
+// Embedding is CPU-intensive, so we need to yield frequently
+const YIELD_BATCH_SIZE = 1;
+
+/**
  * Index a book for semantic search.
+ * Uses chunked processing with yielding to keep UI responsive.
  * 
  * @param bookId - Unique identifier for the book (SHA-256)
  * @param chapters - Array of chapters with id, title, and text
@@ -135,57 +184,78 @@ export async function indexBook(
 ): Promise<void> {
 	console.log(`[VectorService] Indexing book ${bookId.slice(0, 8)}... (${chapters.length} chapters)`);
 	
-	// Ensure embedder is loaded
+	// Ensure embedder is loaded first (this can take time on first run)
+	console.log('[VectorService] Loading embedding model...');
 	await getEmbedder();
+	console.log('[VectorService] Embedding model ready');
 	
 	const chunks: ChunkData[] = [];
 	
-	// Count total chunks for progress
-	const totalChunks = chapters.reduce(
-		(sum, ch) => sum + Math.ceil(ch.text.length / (CHUNK_SIZE - CHUNK_OVERLAP)),
-		0
-	);
-	let processedChunks = 0;
+	// Collect all text chunks first (fast, non-blocking)
+	const allTextChunks: Array<{ text: string; chapterId: string; chapterTitle: string; index: number }> = [];
 	
-	// Process each chapter
 	for (const chapter of chapters) {
 		if (!chapter.text || chapter.text.trim().length === 0) {
 			continue;
 		}
 		
-		// Split chapter into chunks
 		const textChunks = chunkText(chapter.text, CHUNK_SIZE, CHUNK_OVERLAP);
-		
-		// Embed each chunk
 		for (let i = 0; i < textChunks.length; i++) {
-			const chunkText = textChunks[i];
-			
-			try {
-				const embedding = await embed(chunkText);
-				
-				chunks.push({
-					id: `${chapter.id}-${i}`,
-					chapterId: chapter.id,
-					chapterTitle: chapter.title,
-					text: chunkText,
-					embedding,
-				});
-			} catch (error) {
-				console.warn(`[VectorService] Failed to embed chunk ${i} of ${chapter.id}:`, error);
-			}
-			
-			processedChunks++;
-			onProgress?.(processedChunks / totalChunks);
+			allTextChunks.push({
+				text: textChunks[i],
+				chapterId: chapter.id,
+				chapterTitle: chapter.title,
+				index: i,
+			});
 		}
 	}
 	
-	// Store the index
+	const totalChunks = allTextChunks.length;
+	console.log(`[VectorService] Processing ${totalChunks} text chunks...`);
+	
+	// Process chunks with yielding to keep UI responsive
+	for (let i = 0; i < allTextChunks.length; i++) {
+		const chunk = allTextChunks[i];
+		
+		try {
+			const embedding = await embed(chunk.text);
+			
+			chunks.push({
+				id: `${chunk.chapterId}-${chunk.index}`,
+				chapterId: chunk.chapterId,
+				chapterTitle: chunk.chapterTitle,
+				text: chunk.text,
+				embedding,
+			});
+		} catch (error) {
+			console.warn(`[VectorService] Failed to embed chunk ${chunk.index} of ${chunk.chapterId}:`, error);
+		}
+		
+		// Report progress
+		onProgress?.((i + 1) / totalChunks);
+		
+		// Yield to event loop every YIELD_BATCH_SIZE chunks to keep UI responsive
+		if ((i + 1) % YIELD_BATCH_SIZE === 0) {
+			await yieldToMain();
+		}
+	}
+	
+	// Store the index in memory
 	bookIndexes.set(bookId, {
 		chunks,
 		ready: true,
 	});
 	
-	console.log(`[VectorService] Indexed ${chunks.length} chunks for book ${bookId.slice(0, 8)}`);
+	// Persist to IndexedDB for "index once, use forever"
+	const storedIndex: StoredVectorIndex = {
+		bookId,
+		createdAt: Date.now(),
+		chunkCount: chunks.length,
+		chunks,
+	};
+	await storeVectorIndex(storedIndex);
+	
+	console.log(`[VectorService] Indexed and persisted ${chunks.length} chunks for book ${bookId.slice(0, 8)}`);
 }
 
 /**
@@ -264,45 +334,56 @@ export function getMemoryUsage(): { totalChunks: number; books: number } {
 
 /**
  * Split text into overlapping chunks.
+ * Fixed to prevent infinite loops and ensure forward progress.
  */
 function chunkText(text: string, size: number, overlap: number): string[] {
+	if (!text || text.length === 0) return [];
+	if (size <= 0) return [text];
+	if (overlap >= size) overlap = Math.floor(size / 2); // Prevent overlap >= size
+	
 	const chunks: string[] = [];
 	let start = 0;
+	const maxChunks = Math.ceil(text.length / (size - overlap)) + 10; // Safety limit
 	
-	while (start < text.length) {
-		// Try to break at sentence/word boundaries
-		let end = start + size;
+	while (start < text.length && chunks.length < maxChunks) {
+		// Calculate end position
+		let end = Math.min(start + size, text.length);
 		
+		// Only try to find better break points if we're not at the end
 		if (end < text.length) {
-			// Look for a good break point (sentence end or space)
-			const searchStart = Math.max(end - 50, start);
-			const searchText = text.slice(searchStart, end + 50);
+			// Look for a sentence boundary near the end
+			const searchStart = Math.max(start + Math.floor(size * 0.7), start);
+			const searchEnd = Math.min(end + 50, text.length);
+			const searchText = text.slice(searchStart, searchEnd);
 			
-			// Prefer sentence boundaries
-			const sentenceMatch = searchText.match(/[.!?]\s+/g);
-			if (sentenceMatch) {
-				const lastSentenceEnd = searchText.lastIndexOf(sentenceMatch[sentenceMatch.length - 1]);
-				if (lastSentenceEnd > 0) {
-					end = searchStart + lastSentenceEnd + sentenceMatch[sentenceMatch.length - 1].length;
+			// Find last sentence boundary in search area
+			const sentenceMatch = searchText.match(/[.!?]\s+/);
+			if (sentenceMatch && sentenceMatch.index !== undefined) {
+				const breakPoint = searchStart + sentenceMatch.index + sentenceMatch[0].length;
+				if (breakPoint > start && breakPoint <= end + 50) {
+					end = breakPoint;
 				}
 			} else {
 				// Fall back to word boundary
 				const spaceIndex = text.lastIndexOf(' ', end);
-				if (spaceIndex > start) {
-					end = spaceIndex;
+				if (spaceIndex > start + Math.floor(size * 0.5)) {
+					end = spaceIndex + 1; // Include the space in current chunk
 				}
 			}
-		} else {
-			end = text.length;
 		}
 		
+		// Extract and add chunk
 		const chunk = text.slice(start, end).trim();
 		if (chunk.length > 0) {
 			chunks.push(chunk);
 		}
 		
-		start = end - overlap;
-		if (start >= text.length) break;
+		// Calculate next start position - ensure forward progress
+		const nextStart = end - overlap;
+		start = Math.max(nextStart, start + 1); // Always advance at least 1 character
+		
+		// If we've covered all the text, stop
+		if (end >= text.length) break;
 	}
 	
 	return chunks;
@@ -338,6 +419,7 @@ export const vectorService = {
 	isEmbedderReady,
 	preloadEmbedder,
 	isBookIndexed,
+	loadIndexFromStorage,
 	indexBook,
 	search,
 	clearBookIndex,

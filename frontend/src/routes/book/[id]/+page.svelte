@@ -6,11 +6,12 @@
 	import { books } from '$lib/stores/books';
 	import { annotations } from '$lib/stores/annotations';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
+	import { indexingStore } from '$lib/stores/indexing.svelte';
 	import { getEpubData, getEpubDataBySha256 } from '$lib/services/storageService';
 	import { epubService, type ChapterPosition, type TextSelection, type HighlightClickEvent } from '$lib/services/epubService';
 	import type { TocItem, LocationInfo, AnnotationColor, AnnotationLocal, AnnotationDisplay } from '$lib/types';
 	import { AppError, ERROR_MESSAGES, getAnnotationKey } from '$lib/types';
-	import { Loader2, Binoculars } from '@lucide/svelte';
+	import { Loader2, Binoculars, Search, CheckCircle2 } from '@lucide/svelte';
 	import {
 		ReaderHeader,
 		ReaderControls,
@@ -53,6 +54,21 @@
 	let isBookReady = $state(false);
 	let chapters = $state<ChapterPosition[]>([]);
 	let chaptersReady = $state(false);
+	
+	// Indexing status indicator state
+	let showIndexingComplete = $state(false);
+	let lastIndexingStatus = $state<string>('');
+	
+	// Show "Search ready" briefly when indexing completes
+	$effect(() => {
+		if (indexingStore.status === 'ready' && lastIndexingStatus !== 'ready') {
+			showIndexingComplete = true;
+			setTimeout(() => {
+				showIndexingComplete = false;
+			}, 3000); // Show for 3 seconds
+		}
+		lastIndexingStatus = indexingStore.status;
+	});
 
 	// Return to last location state
 	let lastLocationCfi = $state<string | null>(null);
@@ -258,6 +274,12 @@
 			epubService.applyTheme(currentMode === 'dark' ? 'dark' : 'light');
 			isBookReady = true;
 			isLoading = false;
+			
+			// Start indexing for AI search in the background (non-blocking)
+			// Uses the book's sha256 as the index key for consistency
+			if (foundBook.sha256) {
+				indexingStore.indexBook(foundBook.sha256);
+			}
 
 			// Load existing annotations as highlights
 			const currentAnnotations = $annotations.filter(a => a.bookSha256 === foundBook.sha256);
@@ -687,6 +709,19 @@
 			{lastLocationCfi}
 			onReturnToLastLocation={handleReturnToLastLocation}
 		/>
+
+		<!-- Indexing Status Indicator (subtle, bottom-right) -->
+		{#if indexingStore.isIndexing}
+			<div class="fixed bottom-16 right-4 z-20 flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-xs text-primary shadow-sm backdrop-blur-sm transition-opacity">
+				<Loader2 class="h-3 w-3 animate-spin" />
+				<span>Indexing for AI search... {indexingStore.progressPercent}%</span>
+			</div>
+		{:else if showIndexingComplete}
+			<div class="fixed bottom-16 right-4 z-20 flex items-center gap-2 rounded-full bg-green-500/10 px-3 py-1.5 text-xs text-green-600 dark:text-green-400 shadow-sm backdrop-blur-sm transition-opacity">
+				<CheckCircle2 class="h-3 w-3" />
+				<span>AI search ready</span>
+			</div>
+		{/if}
 
 		{#if showTOC}
 			<TocPanel {toc} onClose={() => (showTOC = false)} onItemClick={handleTocClick} />

@@ -7,6 +7,7 @@
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { checkHealth } from '$lib/services/langgraph';
 	import { epubService } from '$lib/services/epubService';
+	import { indexingStore } from '$lib/stores/indexing.svelte';
 	import { DO_NOT_RENDER_ID_PREFIX } from '$lib/types/chat';
 	import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 	import ChatInput from './ChatInput.svelte';
@@ -351,6 +352,14 @@
 				<div class="mx-4 mt-2 flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-amber-600 dark:text-amber-400">
 					<AlertCircle class="h-4 w-4 flex-shrink-0" />
 					<p class="text-xs">LangGraph server unavailable. Start the server to enable AI chat.</p>
+				</div>
+			{/if}
+			
+			<!-- Indexing status indicator in chat -->
+			{#if indexingStore.isIndexing}
+				<div class="mx-4 mt-2 flex items-center gap-2 rounded-md bg-primary/5 px-3 py-1.5 text-primary">
+					<Loader2 class="h-3 w-3 animate-spin flex-shrink-0" />
+					<p class="text-xs">Indexing book for search... {indexingStore.progressPercent}% - chapter reading is available</p>
 				</div>
 			{/if}
 

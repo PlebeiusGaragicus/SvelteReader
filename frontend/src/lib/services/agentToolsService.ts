@@ -14,6 +14,7 @@
 
 import { epubService } from './epubService';
 import { vectorService } from './vectorService';
+import { indexingStore } from '$lib/stores/indexing.svelte';
 import type { ToolCall, ToolResult } from './langgraph';
 
 // Maximum characters for chapter content to prevent token overflow
@@ -194,6 +195,25 @@ async function executeGetChapter(
 }
 
 /**
+ * Wait for indexing to complete if it's in progress.
+ * Returns true if indexing completed successfully, false otherwise.
+ */
+async function waitForIndexing(timeoutMs: number = 30000): Promise<boolean> {
+	const startTime = Date.now();
+	
+	while (indexingStore.isIndexing) {
+		if (Date.now() - startTime > timeoutMs) {
+			console.warn('[AgentTools] Timed out waiting for indexing');
+			return false;
+		}
+		// Wait a bit before checking again
+		await new Promise(resolve => setTimeout(resolve, 500));
+	}
+	
+	return indexingStore.isReady;
+}
+
+/**
  * Semantic search across the book.
  */
 async function executeSearchBook(
@@ -208,25 +228,37 @@ async function executeSearchBook(
 		return {
 			id: toolCallId,
 			result: null,
-			error: 'query argument is required for search_book.',
+			error: 'query argument is required for search_book. Provide a search term like "main themes" or "author discusses propaganda".',
 		};
 	}
 	
 	try {
 		// Check if book is indexed
-		const isIndexed = vectorService.isBookIndexed(bookId);
+		let isIndexed = vectorService.isBookIndexed(bookId);
+		
+		// If not indexed but indexing is in progress, wait for it
+		if (!isIndexed && indexingStore.isIndexing && indexingStore.bookId === bookId) {
+			console.log('[AgentTools] Indexing in progress, waiting...');
+			const completed = await waitForIndexing();
+			if (completed) {
+				isIndexed = true;
+				console.log('[AgentTools] Indexing completed, proceeding with search');
+			}
+		}
 		
 		if (!isIndexed) {
-			// Try to index the book on-demand
-			console.log('[AgentTools] Book not indexed, attempting to index...');
-			const indexed = await indexBookOnDemand(bookId);
-			
-			if (!indexed) {
-				return {
-					id: toolCallId,
-					result: 'The book has not been indexed for search yet. Please wait while indexing completes, or try again later.',
-				};
-			}
+			// Check one more time in case it finished
+			isIndexed = vectorService.isBookIndexed(bookId);
+		}
+		
+		if (!isIndexed) {
+			// Still not indexed - indexing may have failed or not started
+			console.log('[AgentTools] Book not indexed and no indexing in progress');
+			return {
+				id: toolCallId,
+				result: null,
+				error: 'The book has not been indexed for search yet. The book is being indexed in the background - please try search_book() again in a moment, or use get_chapter() to read specific chapters directly.',
+			};
 		}
 		
 		const results = await vectorService.search(query, bookId, topK);
@@ -234,7 +266,7 @@ async function executeSearchBook(
 		if (results.length === 0) {
 			return {
 				id: toolCallId,
-				result: `No results found for "${query}". Try a different search query.`,
+				result: `No passages found matching "${query}". Try different keywords or rephrase your search. You can also use get_chapter() to read specific chapters directly.`,
 			};
 		}
 		
@@ -252,7 +284,7 @@ async function executeSearchBook(
 		return {
 			id: toolCallId,
 			result: null,
-			error: error instanceof Error ? error.message : 'Search failed',
+			error: `Search failed: ${error instanceof Error ? error.message : 'Unknown error'}. Try using get_chapter() to read chapters directly.`,
 		};
 	}
 }
@@ -287,18 +319,29 @@ async function indexBookOnDemand(bookId: string): Promise<boolean> {
 
 /**
  * Pre-index a book (called when opening a book or starting chat).
+ * First checks memory and persistent storage before re-indexing.
  * This runs in the background to prepare for search.
  */
 export async function ensureBookIndexed(
 	bookId: string,
 	onProgress?: (progress: number) => void
 ): Promise<boolean> {
+	// Check memory first
 	if (vectorService.isBookIndexed(bookId)) {
-		console.log('[AgentTools] Book already indexed');
+		console.log('[AgentTools] Book already indexed in memory');
 		return true;
 	}
 	
+	// Try to load from persistent storage
+	const loadedFromStorage = await vectorService.loadIndexFromStorage(bookId);
+	if (loadedFromStorage) {
+		console.log('[AgentTools] Loaded index from persistent storage');
+		return true;
+	}
+	
+	// Need to index from scratch
 	try {
+		console.log('[AgentTools] No persisted index found, extracting chapters...');
 		const chapters = await epubService.getAllChaptersText();
 		
 		if (chapters.length === 0) {

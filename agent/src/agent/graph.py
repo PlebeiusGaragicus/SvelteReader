@@ -73,12 +73,18 @@ def get_chapter(chapter_id: str) -> str:
     """Read a chapter's full text content.
     
     IMPORTANT: Use the EXACT chapter_id from the Table of Contents in your system prompt.
-    Example IDs look like: "chapter-1.xhtml", "ch01.html", "part1.xhtml"
+    The chapter_id is shown in parentheses after each chapter title.
     
     Args:
-        chapter_id: The exact chapter_id string from the Table of Contents (e.g. "chapter-1.xhtml")
+        chapter_id: The exact chapter_id from the Table of Contents (e.g., "np-5", "chapter-1")
     
-    Returns: The chapter's full text. Long chapters may be truncated.
+    Returns: 
+        The chapter's full text content. Long chapters may be truncated.
+        
+    Errors:
+        - "not found": The chapter_id doesn't exist - check the TOC for valid IDs
+        - "empty content": This chapter has no text (may be a cover or title page) - try a different chapter
+        - "not loaded": The book needs to be re-opened in the reader
     """
     return ""
 
@@ -87,16 +93,26 @@ def get_chapter(chapter_id: str) -> str:
 def search_book(query: str, top_k: int = 5) -> str:
     """Semantic search across the entire book to find relevant passages.
     
-    Use this to find:
-    - Specific topics or themes
-    - Quotes or references
-    - Where a concept is discussed
+    Best for finding:
+    - Specific topics or themes ("propaganda techniques")
+    - Key concepts ("author's main argument")
+    - Particular discussions ("examples of misinformation")
+    
+    Tips for effective searches:
+    - Use descriptive phrases, not just keywords
+    - Be specific about what you're looking for
+    - If no results, try rephrasing with different terms
     
     Args:
-        query: What you're looking for (e.g. "discussion of freedom", "character introduction")
-        top_k: Number of results (default 5, max 20)
+        query: What you're looking for (e.g., "author discusses social media manipulation")
+        top_k: Number of results to return (default 5, max 20)
     
-    Returns: Relevant text passages with their chapter locations and relevance scores.
+    Returns: 
+        Relevant text passages with chapter locations and relevance scores.
+        
+    Errors:
+        - "no results": No matching passages found - try different search terms
+        - "not indexed": The book hasn't been indexed yet - use get_chapter() instead
     """
     return ""
 
@@ -148,21 +164,43 @@ def get_system_prompt(
     """Generate a system prompt based on the passage and book context."""
     base_prompt = """You are a reading assistant with access to the user's ebook.
 
-You have tools to explore the book:
-- get_chapter(chapter_id): Read a full chapter's content. Use the EXACT chapter_id from the table of contents below.
-- search_book(query): Semantic search across the entire book. Use this to find specific topics or quotes.
-- get_book_metadata(): Get book title, author, and page count.
-- get_table_of_contents(): Get chapter list (usually not needed since TOC is provided below).
+## Available Tools
 
-IMPORTANT GUIDELINES:
-1. ALWAYS use the exact chapter_id values from the Table of Contents below when calling get_chapter()
-2. For summarization: retrieve specific chapters using get_chapter() with the IDs from the TOC
-3. For finding topics/quotes: use search_book() first to locate relevant passages
-4. Cite your sources with chapter names
-5. Long chapters may be truncated - use search_book() to find specific content within them
-6. Don't guess chapter IDs - only use ones from the Table of Contents
+- **get_chapter(chapter_id)**: Read a chapter's full text. Use the EXACT chapter_id from the Table of Contents below.
+- **search_book(query)**: Semantic search across the book. Best for finding specific topics, quotes, or themes.
+- **get_book_metadata()**: Get book title, author, page count (usually not needed - already in context).
+- **get_table_of_contents()**: Get chapter list (usually not needed - TOC is provided below).
 
-Be concise but thorough. If you can't find information in the book, say so clearly."""
+## How to Answer Questions
+
+**For summarization requests** (e.g., "summarize chapter 3"):
+1. Look up the chapter_id in the Table of Contents below
+2. Call get_chapter(chapter_id) with that EXACT ID
+3. Summarize the returned content
+
+**For topic/quote searches** (e.g., "where does the author discuss X?"):
+1. Call search_book("relevant keywords")
+2. Review the results and cite the chapters where the topic appears
+
+**For questions about specific passages**:
+1. Check if passage context is provided below
+2. If not, use search_book() to find relevant sections
+
+## Critical Rules
+
+1. **Use EXACT chapter_ids** from the Table of Contents - don't guess or modify them
+2. **Handle errors gracefully**: If a tool returns an error, explain the issue to the user rather than retrying endlessly
+3. **Maximum 3 tool calls** for simple requests - don't loop trying different approaches
+4. **If content is unavailable**: Tell the user honestly rather than making up information
+5. **Cite sources**: Always mention which chapter information came from
+
+## Error Handling
+
+- If get_chapter returns an error about "not found" or "empty content", that chapter may be a title page or section header - try a different chapter
+- If search_book returns "no results", the search index may not be ready - suggest the user try again later
+- If tools consistently fail, apologize and explain the technical limitation
+
+Be concise, accurate, and honest about limitations."""
 
     # Add book context (TOC, metadata) - this is the key info the agent needs
     if book_context:

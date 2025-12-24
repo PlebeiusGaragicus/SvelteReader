@@ -2,6 +2,20 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { browser } from '$app/environment';
 import { AppError, getAnnotationKey, type Book, type AnnotationLocal } from '$lib/types';
 
+// Stored vector index format
+export interface StoredVectorIndex {
+	bookId: string;
+	createdAt: number;
+	chunkCount: number;
+	chunks: Array<{
+		id: string;
+		chapterId: string;
+		chapterTitle: string;
+		text: string;
+		embedding: number[];
+	}>;
+}
+
 interface SvelteReaderDB extends DBSchema {
 	epubs: {
 		key: string;
@@ -27,10 +41,14 @@ interface SvelteReaderDB extends DBSchema {
 			'by-owner': string;
 		};
 	};
+	vectorIndexes: {
+		key: string;
+		value: StoredVectorIndex;
+	};
 }
 
 const DB_NAME = 'sveltereader';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase<SvelteReaderDB>> | null = null;
 
@@ -71,6 +89,13 @@ function getDB(): Promise<IDBPDatabase<SvelteReaderDB>> {
 					const annotationsStore = transaction.objectStore('annotations');
 					if (!annotationsStore.indexNames.contains('by-owner')) {
 						annotationsStore.createIndex('by-owner', 'ownerPubkey', { unique: false });
+					}
+				}
+				
+				// Version 4: add vector indexes for AI search
+				if (oldVersion < 4) {
+					if (!db.objectStoreNames.contains('vectorIndexes')) {
+						db.createObjectStore('vectorIndexes');
 					}
 				}
 			}
@@ -176,6 +201,57 @@ export async function getLocations(bookId: string): Promise<string | null> {
 		console.error('Failed to get locations:', e);
 		// Non-critical: return null and locations will be regenerated
 		return null;
+	}
+}
+
+// =============================================================================
+// VECTOR INDEX STORAGE (for AI search)
+// =============================================================================
+
+/**
+ * Store a vector index for a book.
+ * The index is keyed by bookId (sha256) for sharing across users.
+ */
+export async function storeVectorIndex(index: StoredVectorIndex): Promise<void> {
+	if (!browser) return;
+
+	try {
+		const db = await getDB();
+		await db.put('vectorIndexes', index, index.bookId);
+		console.log(`[Storage] Saved vector index for book ${index.bookId.slice(0, 8)}... (${index.chunkCount} chunks)`);
+	} catch (e) {
+		console.error('Failed to store vector index:', e);
+		// Non-critical: index can be regenerated, don't throw
+	}
+}
+
+/**
+ * Get a stored vector index for a book.
+ */
+export async function getVectorIndex(bookId: string): Promise<StoredVectorIndex | null> {
+	if (!browser) return null;
+
+	try {
+		const db = await getDB();
+		const data = await db.get('vectorIndexes', bookId);
+		return data ?? null;
+	} catch (e) {
+		console.error('Failed to get vector index:', e);
+		return null;
+	}
+}
+
+/**
+ * Remove a vector index for a book.
+ */
+export async function removeVectorIndex(bookId: string): Promise<void> {
+	if (!browser) return;
+
+	try {
+		const db = await getDB();
+		await db.delete('vectorIndexes', bookId);
+	} catch (e) {
+		console.error('Failed to remove vector index:', e);
 	}
 }
 
