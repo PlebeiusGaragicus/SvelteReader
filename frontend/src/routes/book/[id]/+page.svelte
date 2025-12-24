@@ -260,6 +260,28 @@
 	onMount(async () => {
 		setReadingMode(true);
 
+		// Wait for CypherTap to be ready (it needs time to restore session on page refresh)
+		// This prevents the "book not found" error caused by checking before login state is restored
+		if (!cyphertap.isReady) {
+			console.log('[Reader] Waiting for CypherTap to be ready...');
+			await new Promise<void>((resolve) => {
+				const checkReady = () => {
+					if (cyphertap.isReady) {
+						console.log('[Reader] CypherTap is ready');
+						resolve();
+					} else {
+						setTimeout(checkReady, 50);
+					}
+				};
+				// Set a timeout to avoid infinite wait
+				const timeout = setTimeout(() => {
+					console.log('[Reader] CypherTap timeout - proceeding anyway');
+					resolve();
+				}, 3000);
+				checkReady();
+			});
+		}
+
 		// Ensure stores are initialized before checking for book
 		// Priority: spectate target > logged-in user > none
 		const userPubkey = spectateStore.isSpectating && spectateStore.target

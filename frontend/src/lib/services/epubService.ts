@@ -1305,6 +1305,7 @@ class EpubService {
 	/**
 	 * Format book context as a string for inclusion in agent prompts.
 	 * Includes the full TOC with chapter_ids that can be used with get_chapter().
+	 * Also includes the user's current reading location for context.
 	 */
 	async getBookContextString(): Promise<string | null> {
 		if (!this.book) return null;
@@ -1313,14 +1314,25 @@ class EpubService {
 		if (!metadata) return null;
 		
 		const toc = await this.getTableOfContentsForAgent();
+		const pageInfo = await this.getCurrentPageInfo();
 		
 		const lines: string[] = [
 			`Book: "${metadata.title}" by ${metadata.author}`,
 			`Approximate pages: ${metadata.totalPages}`,
-			``,
-			`Table of Contents (${toc.filter(item => item.level === 0).length} top-level sections):`,
-			``,
 		];
+		
+		// Add current reading position if available
+		if (pageInfo) {
+			if (pageInfo.chapterTitle) {
+				lines.push(`User is currently reading: "${pageInfo.chapterTitle}" (${pageInfo.percentage}% through the book)`);
+			} else {
+				lines.push(`User's reading progress: ${pageInfo.percentage}% through the book`);
+			}
+		}
+		
+		lines.push('');
+		lines.push(`Table of Contents (${toc.filter(item => item.level === 0).length} top-level sections):`);
+		lines.push('');
 		
 		// Include both the id AND a hint about the href for debugging
 		for (const item of toc) {
@@ -1352,6 +1364,59 @@ class EpubService {
 		}
 		
 		return null;
+	}
+
+	/**
+	 * Get information about the current reading position.
+	 * Returns chapter name, progress, and visible text on the current page.
+	 */
+	async getCurrentPageInfo(): Promise<{
+		chapterTitle: string | null;
+		chapterId: string | null;
+		percentage: number;
+		visibleText: string | null;
+	} | null> {
+		if (!this.rendition || !this.book) return null;
+
+		const location = this.rendition.currentLocation() as any;
+		if (!location || !location.start) return null;
+
+		// Get the current spine item href
+		const spineIndex = location.start.index || 0;
+		const spine = (this.book.spine as any);
+		const spineItem = spine?.items?.[spineIndex] || spine?.get?.(spineIndex);
+		const href = spineItem?.href || '';
+
+		// Find matching TOC entry
+		const toc = await this.getTableOfContents();
+		const tocEntry = this.findTocEntryForHref(toc, href);
+
+		// Get location info
+		const locationInfo = this.getCurrentLocation();
+		const percentage = locationInfo?.percentage || 0;
+
+		// Get visible text from the current page
+		let visibleText: string | null = null;
+		try {
+			const contents = this.rendition.getContents() as any;
+			if (contents && contents.length > 0) {
+				const content = contents[0];
+				const body = content?.document?.body;
+				if (body) {
+					// Get text content, limited to reasonable size
+					visibleText = body.textContent?.trim().slice(0, 2000) || null;
+				}
+			}
+		} catch (e) {
+			console.warn('[EpubService] Failed to get visible text:', e);
+		}
+
+		return {
+			chapterTitle: tocEntry?.label || this.extractTitleFromHref(href) || null,
+			chapterId: tocEntry?.id || null,
+			percentage,
+			visibleText,
+		};
 	}
 
 	private extractTitleFromHref(href: string): string {

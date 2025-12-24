@@ -47,6 +47,7 @@ export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
 	onMessagesSync?: (messages: Message[]) => void;  // Sync full message state from server
+	onIterationStart?: (iteration: number) => void;  // Called when a new agent iteration starts
 	onComplete?: (messages: Message[], refund?: boolean) => void;
 	onError?: (error: Error) => void;
 	onThreadId?: (threadId: string) => void;
@@ -107,9 +108,8 @@ export async function submitMessage(
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
 	const assistantId = options.assistantId || import.meta.env.VITE_LANGGRAPH_ASSISTANT_ID || 'agent';
-	// Lower max iterations to prevent runaway tool loops (was 10, now 5)
-	// Agent prompt now instructs to limit to 3 tool calls for simple requests
-	const maxIterations = options.maxToolIterations ?? 5;
+	// Max iterations for tool call loops
+	const maxIterations = options.maxToolIterations ?? 10;
 	
 	let threadId = options.threadId;
 	
@@ -169,6 +169,10 @@ export async function submitMessage(
 			console.log(`[LangGraph] Iteration ${iteration}/${maxIterations}`);
 			console.log(`[LangGraph] Thread ID: ${threadId}`);
 			console.log(`[LangGraph] ================================================`);
+			
+			// Signal iteration start - allows UI to reset streaming state
+			callbacks.onIterationStart?.(iteration);
+			currentContent = '';  // Reset content tracker for new iteration
 			
 			let interrupted = false;
 			let pendingToolCalls: ToolCall[] = [];

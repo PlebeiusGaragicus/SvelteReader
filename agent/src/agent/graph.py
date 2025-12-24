@@ -56,19 +56,6 @@ def get_thread_id(config: RunnableConfig | None) -> str:
 # =============================================================================
 
 @tool
-def get_table_of_contents() -> str:
-    """Get the table of contents. Usually NOT needed - the TOC with chapter_ids is already in your system prompt under 'BOOK INFORMATION'."""
-    # Never actually called - graph interrupts before execution
-    return ""
-
-
-@tool
-def get_book_metadata() -> str:
-    """Get book metadata (title, author, page count). Usually NOT needed - this info is already in your system prompt."""
-    return ""
-
-
-@tool
 def get_chapter(chapter_id: str) -> str:
     """Read a chapter's full text content.
     
@@ -90,7 +77,7 @@ def get_chapter(chapter_id: str) -> str:
 
 
 @tool
-def search_book(query: str, top_k: int = 5) -> str:
+def search_book(query: str, top_k: int = 8) -> str:
     """Semantic search across the entire book to find relevant passages.
     
     Best for finding:
@@ -117,8 +104,24 @@ def search_book(query: str, top_k: int = 5) -> str:
     return ""
 
 
+@tool
+def get_current_page() -> str:
+    """Get what the user is currently reading.
+    
+    Returns the user's current reading position including:
+    - Current chapter title
+    - Progress through the book (percentage)
+    - The visible text on the current page
+    
+    Use this to understand what the user is currently looking at,
+    especially when they ask questions like "what does this mean?"
+    or refer to "this page" or "this part".
+    """
+    return ""
+
+
 # All tools that require client-side execution
-CLIENT_TOOLS = [get_table_of_contents, get_book_metadata, get_chapter, search_book]
+CLIENT_TOOLS = [get_chapter, search_book, get_current_page]
 
 
 # =============================================================================
@@ -168,8 +171,7 @@ def get_system_prompt(
 
 - **get_chapter(chapter_id)**: Read a chapter's full text. Use the EXACT chapter_id from the Table of Contents below.
 - **search_book(query)**: Semantic search across the book. Best for finding specific topics, quotes, or themes.
-- **get_book_metadata()**: Get book title, author, page count (usually not needed - already in context).
-- **get_table_of_contents()**: Get chapter list (usually not needed - TOC is provided below).
+- **get_current_page()**: Get what the user is currently reading (chapter, visible text). Use when user says "this page" or "what does this mean?".
 
 ## How to Answer Questions
 

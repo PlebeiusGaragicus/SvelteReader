@@ -6,8 +6,6 @@
  * handles the actual execution using EPUB data and vector search.
  * 
  * Tools:
- * - get_table_of_contents: Returns book structure
- * - get_book_metadata: Returns title, author, page count
  * - get_chapter: Returns full chapter text
  * - search_book: Semantic search across the book
  */
@@ -56,6 +54,10 @@ export async function executeToolCall(
 			
 			case 'search_book':
 				result = await executeSearchBook(toolCall.id, toolCall.args, bookId);
+				break;
+			
+			case 'get_current_page':
+				result = await executeGetCurrentPage(toolCall.id);
 				break;
 			
 			default:
@@ -143,6 +145,53 @@ function executeGetBookMetadata(toolCallId: string): ToolResult {
 - Author: ${metadata.author}
 - Total Pages: ~${metadata.totalPages}`,
 	};
+}
+
+/**
+ * Get information about what the user is currently reading.
+ */
+async function executeGetCurrentPage(toolCallId: string): Promise<ToolResult> {
+	try {
+		const pageInfo = await epubService.getCurrentPageInfo();
+		
+		if (!pageInfo) {
+			return {
+				id: toolCallId,
+				result: null,
+				error: 'Could not determine current reading position. The book may not be fully loaded.',
+			};
+		}
+		
+		const lines: string[] = [];
+		
+		if (pageInfo.chapterTitle) {
+			lines.push(`Current Chapter: "${pageInfo.chapterTitle}"`);
+			if (pageInfo.chapterId) {
+				lines.push(`Chapter ID: ${pageInfo.chapterId}`);
+			}
+		}
+		
+		lines.push(`Reading Progress: ${pageInfo.percentage}% through the book`);
+		
+		if (pageInfo.visibleText) {
+			lines.push('');
+			lines.push('--- Text visible on current page ---');
+			lines.push(pageInfo.visibleText);
+			lines.push('--- End of visible text ---');
+		}
+		
+		return {
+			id: toolCallId,
+			result: lines.join('\n'),
+		};
+	} catch (error) {
+		console.error('[AgentTools] Error in executeGetCurrentPage:', error);
+		return {
+			id: toolCallId,
+			result: null,
+			error: error instanceof Error ? error.message : 'Failed to get current page',
+		};
+	}
 }
 
 /**
