@@ -87,10 +87,10 @@
 	let chatAnnotationId = $state<string | null>(null);
 	let chatCfiRange = $state<string | null>(null);
 	
-	// Resizable chat panel state
-	let chatPanelWidth = $state(450); // Default width in pixels (wider than w-96)
+	// Resizable chat panel state - default to ~50% of viewport width, min 500px
+	let chatPanelWidth = $state(Math.max(500, Math.floor(window.innerWidth * 0.45)));
 	let isResizing = $state(false);
-	const MIN_PANEL_WIDTH = 320;
+	const MIN_PANEL_WIDTH = 400;
 	const MAX_PANEL_WIDTH = 800;
 	
 	// Handle panel resize drag - using document-level capture for smooth dragging
@@ -622,7 +622,7 @@
 			text: context.text,
 			note: context.note,
 			bookTitle: book?.title,
-			chapter: currentLocation?.chapter
+			chapter: currentLocation?.chapterTitle
 		};
 		
 		// Track which annotation we're chatting about

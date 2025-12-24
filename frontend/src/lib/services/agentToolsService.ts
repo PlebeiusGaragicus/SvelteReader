@@ -40,14 +40,6 @@ export async function executeToolCall(
 		let result: ToolResult;
 		
 		switch (toolCall.name) {
-			case 'get_table_of_contents':
-				result = await executeGetTableOfContents(toolCall.id);
-				break;
-			
-			case 'get_book_metadata':
-				result = executeGetBookMetadata(toolCall.id);
-				break;
-			
 			case 'get_chapter':
 				result = await executeGetChapter(toolCall.id, toolCall.args);
 				break;
@@ -97,54 +89,6 @@ function logToolResult(toolName: string, result: ToolResult): void {
 		console.log(`[AgentTools] Result preview: ${resultStr.slice(0, 300)}${resultStr.length > 300 ? '...' : ''}`);
 	}
 	console.log(`[AgentTools] ========================================`);
-}
-
-/**
- * Get the table of contents formatted for the agent.
- */
-async function executeGetTableOfContents(toolCallId: string): Promise<ToolResult> {
-	const toc = await epubService.getTableOfContentsForAgent();
-	
-	if (!toc || toc.length === 0) {
-		return {
-			id: toolCallId,
-			result: 'No table of contents available for this book.',
-		};
-	}
-	
-	// Format as readable text for the agent
-	const formatted = toc.map(item => {
-		const indent = '  '.repeat(item.level);
-		return `${indent}- ${item.title} (id: ${item.id})`;
-	}).join('\n');
-	
-	return {
-		id: toolCallId,
-		result: `Table of Contents:\n\n${formatted}\n\nUse get_chapter(chapter_id) with one of the IDs above to retrieve chapter content.`,
-	};
-}
-
-/**
- * Get book metadata.
- */
-function executeGetBookMetadata(toolCallId: string): ToolResult {
-	const metadata = epubService.getMetadata();
-	
-	if (!metadata) {
-		return {
-			id: toolCallId,
-			result: null,
-			error: 'No book is currently loaded.',
-		};
-	}
-	
-	return {
-		id: toolCallId,
-		result: `Book Metadata:
-- Title: ${metadata.title}
-- Author: ${metadata.author}
-- Total Pages: ~${metadata.totalPages}`,
-	};
 }
 
 /**
@@ -263,23 +207,33 @@ async function waitForIndexing(timeoutMs: number = 30000): Promise<boolean> {
 }
 
 /**
- * Semantic search across the book.
+ * Semantic search across the book with multiple queries for better coverage.
  */
 async function executeSearchBook(
 	toolCallId: string,
 	args: Record<string, unknown>,
 	bookId: string
 ): Promise<ToolResult> {
-	const query = args.query as string;
-	const topK = Math.min((args.top_k as number) || 5, 20);
+	// Support both new multi-query format and legacy single query
+	let queries: string[] = [];
+	if (Array.isArray(args.queries)) {
+		queries = args.queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 0);
+	} else if (typeof args.query === 'string' && args.query.trim()) {
+		// Legacy single query support
+		queries = [args.query.trim()];
+	}
 	
-	if (!query) {
+	const topK = Math.min((args.top_k as number) || 5, 10);
+	
+	if (queries.length === 0) {
 		return {
 			id: toolCallId,
 			result: null,
-			error: 'query argument is required for search_book. Provide a search term like "main themes" or "author discusses propaganda".',
+			error: 'queries argument is required for search_book. Provide 2-4 search queries like ["main themes", "author\'s argument", "key concepts"].',
 		};
 	}
+	
+	console.log('[AgentTools] Executing search with queries:', queries);
 	
 	try {
 		// Check if book is indexed
@@ -310,23 +264,46 @@ async function executeSearchBook(
 			};
 		}
 		
-		const results = await vectorService.search(query, bookId, topK);
+		// Execute all queries and collect results
+		const allResults: Array<{ query: string; chapter: string; text: string; score: number }> = [];
 		
-		if (results.length === 0) {
+		for (const query of queries) {
+			const results = await vectorService.search(query, bookId, topK);
+			results.forEach(r => {
+				allResults.push({ query, chapter: r.chapter, text: r.text, score: r.score });
+			});
+		}
+		
+		if (allResults.length === 0) {
 			return {
 				id: toolCallId,
-				result: `No passages found matching "${query}". Try different keywords or rephrase your search. You can also use get_chapter() to read specific chapters directly.`,
+				result: `No passages found for any of the search queries: ${queries.map(q => `"${q}"`).join(', ')}. Try different keywords or use get_chapter() to read specific chapters directly.`,
 			};
 		}
 		
+		// Deduplicate by text content (keep highest scoring)
+		const seen = new Map<string, typeof allResults[0]>();
+		for (const r of allResults) {
+			const key = r.text.slice(0, 200); // Use first 200 chars as key
+			const existing = seen.get(key);
+			if (!existing || r.score > existing.score) {
+				seen.set(key, r);
+			}
+		}
+		
+		// Sort by score descending and take top results
+		const dedupedResults = Array.from(seen.values())
+			.sort((a, b) => b.score - a.score)
+			.slice(0, Math.min(15, topK * queries.length));
+		
 		// Format results for the agent
-		const formatted = results.map((r, i) => 
-			`[Result ${i + 1}] (Chapter: ${r.chapter}, Score: ${r.score.toFixed(2)})\n${r.text}`
+		const formatted = dedupedResults.map((r, i) => 
+			`[Result ${i + 1}] (Chapter: ${r.chapter}, Score: ${r.score.toFixed(2)}, Query: "${r.query}")\n${r.text}`
 		).join('\n\n---\n\n');
 		
 		return {
 			id: toolCallId,
-			result: `Search results for "${query}":\n\n${formatted}`,
+			result: `Search results for ${queries.length} queries (${queries.map(q => `"${q}"`).join(', ')}):\n\n${formatted}`,
 		};
 	} catch (error) {
 		console.error('[AgentTools] Search failed:', error);

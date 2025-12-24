@@ -77,25 +77,25 @@ def get_chapter(chapter_id: str) -> str:
 
 
 @tool
-def search_book(query: str, top_k: int = 8) -> str:
+def search_book(queries: list[str], top_k: int = 5) -> str:
     """Semantic search across the entire book to find relevant passages.
     
-    Best for finding:
-    - Specific topics or themes ("propaganda techniques")
-    - Key concepts ("author's main argument")
-    - Particular discussions ("examples of misinformation")
+    IMPORTANT: Provide multiple search queries (2-4) to maximize chances of finding relevant content.
+    Each query should approach the topic from a different angle.
     
-    Tips for effective searches:
-    - Use descriptive phrases, not just keywords
-    - Be specific about what you're looking for
-    - If no results, try rephrasing with different terms
+    Best for finding:
+    - Specific topics or themes
+    - Key concepts and arguments
+    - Particular discussions or examples
     
     Args:
-        query: What you're looking for (e.g., "author discusses social media manipulation")
-        top_k: Number of results to return (default 5, max 20)
+        queries: List of 2-4 search queries approaching the topic from different angles.
+                 Example: ["propaganda techniques", "disinformation tactics", "online manipulation methods"]
+        top_k: Number of results per query (default 5, max 10)
     
     Returns: 
         Relevant text passages with chapter locations and relevance scores.
+        Results are deduplicated across queries.
         
     Errors:
         - "no results": No matching passages found - try different search terms
@@ -170,7 +170,7 @@ def get_system_prompt(
 ## Available Tools
 
 - **get_chapter(chapter_id)**: Read a chapter's full text. Use the EXACT chapter_id from the Table of Contents below.
-- **search_book(query)**: Semantic search across the book. Best for finding specific topics, quotes, or themes.
+- **search_book(queries)**: Semantic search with multiple queries (2-4) for better results. Example: ["topic phrase 1", "related concept", "alternative wording"].
 - **get_current_page()**: Get what the user is currently reading (chapter, visible text). Use when user says "this page" or "what does this mean?".
 
 ## How to Answer Questions
@@ -190,11 +190,12 @@ def get_system_prompt(
 
 ## Critical Rules
 
-1. **Use EXACT chapter_ids** from the Table of Contents - don't guess or modify them
-2. **Handle errors gracefully**: If a tool returns an error, explain the issue to the user rather than retrying endlessly
-3. **Maximum 3 tool calls** for simple requests - don't loop trying different approaches
-4. **If content is unavailable**: Tell the user honestly rather than making up information
-5. **Cite sources**: Always mention which chapter information came from
+1. **ALWAYS explain first**: Before calling any tool, briefly tell the user what you're about to do (e.g., "Let me read that chapter..." or "I'll search for that topic..."). This helps users understand your process.
+2. **Use EXACT chapter_ids** from the Table of Contents - don't guess or modify them
+3. **Handle errors gracefully**: If a tool returns an error, explain the issue to the user rather than retrying endlessly
+4. **Maximum 3 tool calls** for simple requests - don't loop trying different approaches
+5. **If content is unavailable**: Tell the user honestly rather than making up information
+6. **Cite sources**: Always mention which chapter information came from
 
 ## Error Handling
 
