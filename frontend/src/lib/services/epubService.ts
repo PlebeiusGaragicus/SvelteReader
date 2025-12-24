@@ -851,6 +851,518 @@ class EpubService {
 		}, 300);
 	}
 
+	// =============================================================================
+	// TEXT EXTRACTION FOR RAG (Agent-Driven Retrieval)
+	// =============================================================================
+
+	/**
+	 * Get the full text content of a chapter by its ID/href.
+	 * Used by the AI agent's get_chapter tool.
+	 * 
+	 * The chapterId can be:
+	 * - A TOC nav ID (e.g., "np-5") - will be resolved to href via TOC lookup
+	 * - A spine href or partial href (e.g., "chapter5.xhtml")
+	 * - A spine idref
+	 */
+	async getChapterText(chapterId: string): Promise<string> {
+		if (!this.book) {
+			throw new Error('No book is currently loaded. Please open a book first.');
+		}
+		
+		console.log(`[EpubService] getChapterText called with: "${chapterId}"`);
+		
+		// Wait for spine to be loaded (critical!)
+		await this.book.loaded.spine;
+		
+		const spine = this.book.spine as any;
+		const items: any[] = spine?.items || [];
+		
+		console.log(`[EpubService] Spine has ${items.length} items`);
+		if (items.length === 0) {
+			throw new Error('Book spine is empty. The book may not have loaded correctly.');
+		}
+		
+		if (items.length > 0) {
+			console.log('[EpubService] First spine item:', {
+				href: items[0]?.href,
+				hasLoad: typeof items[0]?.load === 'function',
+				keys: Object.keys(items[0] || {})
+			});
+		}
+		
+		// Resolve the chapterId to an href first
+		let targetHref: string | null = null;
+		
+		// Check if it's a TOC nav ID (like "np-5") - resolve via TOC
+		const tocHref = await this.resolveTocIdToHref(chapterId);
+		if (tocHref) {
+			targetHref = tocHref.split('#')[0]; // Remove fragment
+			console.log(`[EpubService] Resolved via TOC: "${chapterId}" -> "${targetHref}"`);
+		} else {
+			// Use as-is (might be an href directly)
+			targetHref = chapterId;
+			console.log(`[EpubService] Using chapterId as href: "${targetHref}"`);
+		}
+		
+		// Find the spine item by href
+		let foundIndex = -1;
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
+			const itemHref = item?.href || '';
+			
+			// Try exact match
+			if (itemHref === targetHref) {
+				foundIndex = i;
+				console.log(`[EpubService] Exact match at index ${i}: "${itemHref}"`);
+				break;
+			}
+			
+			// Try ends-with match (handle path differences)
+			if (itemHref.endsWith(targetHref) || targetHref.endsWith(itemHref)) {
+				foundIndex = i;
+				console.log(`[EpubService] EndsWith match at index ${i}: "${itemHref}" <-> "${targetHref}"`);
+				break;
+			}
+			
+			// Try filename match
+			const targetFilename = targetHref.split('/').pop();
+			const itemFilename = itemHref.split('/').pop();
+			if (targetFilename && itemFilename && targetFilename === itemFilename) {
+				foundIndex = i;
+				console.log(`[EpubService] Filename match at index ${i}: "${itemFilename}"`);
+				break;
+			}
+		}
+		
+		if (foundIndex === -1) {
+			console.error(`[EpubService] No spine item found for "${targetHref}"`);
+			console.error('[EpubService] Available hrefs:', items.slice(0, 10).map((i: any) => i?.href));
+			const availableIds = items.slice(0, 5).map((i: any) => i?.href?.split('/').pop()).filter(Boolean).join(', ');
+			throw new Error(`Chapter "${chapterId}" not found. Available files include: ${availableIds || 'none'}. Try using get_table_of_contents() to see valid chapter IDs.`);
+		}
+		
+		// Get the href from the spine item data
+		const spineItem = items[foundIndex];
+		const chapterHref = spineItem?.href;
+		
+		console.log(`[EpubService] Found spine item at index ${foundIndex}:`, {
+			href: chapterHref
+		});
+		
+		if (!chapterHref) {
+			throw new Error(`Spine item at index ${foundIndex} has no href. The book structure may be corrupted.`);
+		}
+		
+		const text = await this.extractTextFromHref(chapterHref);
+		
+		// Validate that we got content
+		if (!text || text.trim().length === 0) {
+			throw new Error(`Chapter "${chapterId}" exists but contains no readable text. This may be a title page, cover, or empty section. Try a different chapter.`);
+		}
+		
+		return text;
+	}
+
+	/**
+	 * Resolve a TOC navigation ID to its corresponding href.
+	 * TOC items have IDs like "np-5" that map to hrefs like "xhtml/chapter5.xhtml"
+	 */
+	private async resolveTocIdToHref(tocId: string): Promise<string | null> {
+		if (!this.book) return null;
+		
+		// Ensure navigation is loaded
+		await this.book.loaded.navigation;
+		
+		const toc = await this.getTableOfContentsForAgent();
+		console.log(`[EpubService] resolveTocIdToHref: looking for "${tocId}" in ${toc.length} TOC entries`);
+		console.log('[EpubService] All TOC entries:', toc.map(t => ({ id: t.id, href: t.href, title: t.title.slice(0, 30) })));
+		
+		const entry = toc.find(item => item.id === tocId);
+		if (entry) {
+			console.log(`[EpubService] Found entry: id="${entry.id}", href="${entry.href}", hasHref=${!!entry.href}`);
+			if (!entry.href) {
+				console.error(`[EpubService] Entry found but has no href! This TOC entry may be a section header without actual content.`);
+				return null;
+			}
+			return entry.href;
+		}
+		
+		// Try fuzzy matching - the agent might send slightly different IDs
+		const fuzzyMatch = toc.find(item => 
+			item.id.toLowerCase() === tocId.toLowerCase() ||
+			item.href?.includes(tocId) ||
+			item.title.toLowerCase().includes(tocId.toLowerCase())
+		);
+		
+		if (fuzzyMatch) {
+			console.log(`[EpubService] Fuzzy match found: id="${fuzzyMatch.id}", href="${fuzzyMatch.href}"`);
+			return fuzzyMatch.href || null;
+		}
+		
+		console.log(`[EpubService] No entry found for "${tocId}". Available IDs: ${toc.slice(0, 10).map(t => t.id).join(', ')}`);
+		return null;
+	}
+
+	/**
+	 * Extract text content from a chapter by its href.
+	 * Uses book.section() to get a proper Section object with load() method.
+	 * Handles both HTML and XHTML content with various document structures.
+	 */
+	private async extractTextFromHref(href: string): Promise<string> {
+		if (!this.book) throw new Error('No book loaded');
+		
+		console.log('[EpubService] extractTextFromHref called with:', href);
+		
+		// Use book.section() to get a proper Section object with load() method
+		const section = this.book.section(href);
+		
+		if (!section) {
+			console.error('[EpubService] Section not found for href:', href);
+			// List available sections for debugging
+			const spine = this.book.spine as any;
+			const available = (spine?.items || []).slice(0, 5).map((i: any) => i?.href).filter(Boolean).join(', ');
+			throw new Error(`Section "${href}" not found in book. Available sections include: ${available || 'none'}`);
+		}
+		
+		console.log('[EpubService] Got section:', {
+			href: section.href,
+			hasLoad: typeof section.load === 'function'
+		});
+		
+		if (typeof section.load !== 'function') {
+			throw new Error(`Section "${href}" cannot be loaded. The book may need to be re-opened.`);
+		}
+		
+		try {
+			console.log('[EpubService] Loading section...');
+			
+			let text = '';
+			
+			// Try Method A: Use section.load() to get a document
+			try {
+				const doc = await section.load(this.book.load.bind(this.book));
+				
+				if (doc) {
+					console.log('[EpubService] Section loaded via load():', {
+						hasBody: !!doc?.body,
+						hasDocumentElement: !!doc?.documentElement,
+						docType: doc?.constructor?.name
+					});
+					
+					// Try multiple ways to extract text content
+					// Some EPUB formats have different document structures
+					
+					// Method 1: Standard body element
+					if (doc.body) {
+						text = doc.body.textContent || '';
+						console.log('[EpubService] Extracted from body:', text.length, 'chars');
+					}
+					
+					// Method 2: XHTML body with namespace (querySelector handles namespaces)
+					if (!text && doc.querySelector) {
+						const body = doc.querySelector('body');
+						if (body) {
+							text = body.textContent || '';
+							console.log('[EpubService] Extracted from querySelector body:', text.length, 'chars');
+						}
+					}
+					
+					// Method 3: Get all text from documentElement (fallback)
+					if (!text && doc.documentElement) {
+						text = doc.documentElement.textContent || '';
+						console.log('[EpubService] Extracted from documentElement:', text.length, 'chars');
+					}
+				}
+			} catch (loadError) {
+				console.warn('[EpubService] section.load() failed, trying render():', loadError);
+			}
+			
+			// Try Method B: Use book.load() directly to get raw content
+			if (!text && this.book.load) {
+				try {
+					console.log('[EpubService] Trying direct book.load()...');
+					const rawContent = await this.book.load(href);
+					
+					if (rawContent) {
+						console.log('[EpubService] Got raw content, type:', typeof rawContent);
+						
+						if (typeof rawContent === 'string') {
+							// Parse HTML string
+							const parser = new DOMParser();
+							const parsed = parser.parseFromString(rawContent, 'text/html');
+							text = parsed.body?.textContent || parsed.documentElement?.textContent || '';
+							console.log('[EpubService] Extracted from parsed HTML string:', text.length, 'chars');
+						} else if (rawContent instanceof Document) {
+							text = rawContent.body?.textContent || rawContent.documentElement?.textContent || '';
+							console.log('[EpubService] Extracted from Document:', text.length, 'chars');
+						}
+					}
+				} catch (directLoadError) {
+					console.warn('[EpubService] Direct book.load() failed:', directLoadError);
+				}
+			}
+			
+			// Try Method C: Access contents via spine item directly  
+			if (!text) {
+				const spine = this.book.spine as any;
+				const spineItem = spine?.items?.find((item: any) => 
+					item?.href === href || item?.href?.endsWith(href) || href.endsWith(item?.href || '')
+				);
+				
+				if (spineItem?.contents) {
+					console.log('[EpubService] Trying spine item contents...');
+					const contents = spineItem.contents;
+					if (contents.body) {
+						text = contents.body.textContent || '';
+						console.log('[EpubService] Extracted from spine contents:', text.length, 'chars');
+					}
+				}
+			}
+			
+			// Try Method D: Access via the book's archive directly
+			if (!text && (this.book as any).archive) {
+				try {
+					console.log('[EpubService] Trying archive.getText()...');
+					const archive = (this.book as any).archive;
+					
+					// Try different path variations
+					const pathsToTry = [
+						href,
+						`OEBPS/${href}`,
+						`OPS/${href}`,
+						`EPUB/${href}`,
+						`Text/${href}`
+					];
+					
+					for (const path of pathsToTry) {
+						try {
+							const rawHtml = await archive.getText(path);
+							if (rawHtml) {
+								console.log('[EpubService] Got archive content for path:', path);
+								const parser = new DOMParser();
+								const parsed = parser.parseFromString(rawHtml, 'text/html');
+								text = parsed.body?.textContent || parsed.documentElement?.textContent || '';
+								if (text.trim()) {
+									console.log('[EpubService] Extracted from archive:', text.length, 'chars');
+									break;
+								}
+							}
+						} catch {
+							// Try next path
+						}
+					}
+				} catch (archiveError) {
+					console.warn('[EpubService] Archive access failed:', archiveError);
+				}
+			}
+			
+			section.unload();
+			
+			console.log('[EpubService] Final extracted text length:', text.trim().length);
+			return text.trim();
+		} catch (e: any) {
+			console.error('[EpubService] Failed to load section:', {
+				errorMessage: e?.message,
+				href: href
+			});
+			throw new Error(`Failed to load chapter "${href}": ${e?.message || 'unknown error'}. Try refreshing the book.`);
+		}
+	}
+
+	/**
+	 * Get all text content from the book for indexing.
+	 * Used to build the client-side vector store.
+	 */
+	async getAllChaptersText(): Promise<Array<{
+		id: string;
+		title: string;
+		text: string;
+		href: string;
+	}>> {
+		if (!this.book) throw new Error('No book loaded');
+		
+		// Ensure spine is loaded
+		await this.book.loaded.spine;
+		
+		const chapters: Array<{ id: string; title: string; text: string; href: string }> = [];
+		const toc = await this.getTableOfContents();
+		const spine = this.book.spine as any;
+		const items = spine?.items || [];
+		
+		console.log(`[EpubService] getAllChaptersText: processing ${items.length} spine items`);
+		
+		for (const item of items) {
+			const href = item?.href;
+			if (!href) continue;
+			
+			try {
+				// Use the robust extractTextFromHref method with all fallbacks
+				const text = await this.extractTextFromHref(href);
+				
+				// Find TOC entry for title
+				const tocEntry = this.findTocEntryForHref(toc, href);
+				
+				if (text.trim()) {
+					chapters.push({
+						id: item.idref || item.id || href,
+						title: tocEntry?.label || this.extractTitleFromHref(href),
+						text: text.trim(),
+						href: href,
+					});
+					console.log(`[EpubService] Indexed chapter: ${href} (${text.length} chars)`);
+				} else {
+					console.log(`[EpubService] Skipped empty chapter: ${href}`);
+				}
+			} catch (e) {
+				console.warn(`[EpubService] Failed to extract chapter ${href}:`, e);
+			}
+		}
+		
+		console.log(`[EpubService] getAllChaptersText: extracted ${chapters.length} chapters with content`);
+		return chapters;
+	}
+
+	/**
+	 * Get book metadata for the AI agent.
+	 */
+	getMetadata(): { title: string; author: string; totalPages: number } | null {
+		if (!this.book) return null;
+		
+		const metadata = (this.book as any).packaging?.metadata;
+		const spine = this.book.spine as any;
+		
+		return {
+			title: metadata?.title || 'Unknown Title',
+			author: metadata?.creator || 'Unknown Author',
+			totalPages: this.totalLocations || spine?.items?.length * 20 || 100,
+		};
+	}
+
+	/**
+	 * Get table of contents formatted for the AI agent.
+	 */
+	async getTableOfContentsForAgent(): Promise<Array<{
+		id: string;
+		title: string;
+		href: string;
+		level: number;
+	}>> {
+		const toc = await this.getTableOfContents();
+		return this.flattenTocForAgent(toc, 0);
+	}
+
+	private flattenTocForAgent(items: TocItem[], level: number): Array<{
+		id: string;
+		title: string;
+		href: string;
+		level: number;
+	}> {
+		const result: Array<{ id: string; title: string; href: string; level: number }> = [];
+		
+		for (const item of items) {
+			result.push({
+				id: item.id || item.href,
+				title: item.label,
+				href: item.href,
+				level,
+			});
+			
+			if (item.subitems) {
+				result.push(...this.flattenTocForAgent(item.subitems, level + 1));
+			}
+		}
+		
+		return result;
+	}
+
+	/**
+	 * Get comprehensive book context for the AI agent.
+	 * This provides all the information the agent needs to use tools effectively.
+	 */
+	async getBookContext(): Promise<{
+		metadata: { title: string; author: string; totalPages: number };
+		tableOfContents: Array<{ id: string; title: string; level: number }>;
+		chapterCount: number;
+	} | null> {
+		if (!this.book) return null;
+		
+		const metadata = this.getMetadata();
+		if (!metadata) return null;
+		
+		const toc = await this.getTableOfContentsForAgent();
+		
+		return {
+			metadata,
+			tableOfContents: toc.map(item => ({
+				id: item.id,
+				title: item.title,
+				level: item.level,
+			})),
+			chapterCount: toc.filter(item => item.level === 0).length,
+		};
+	}
+
+	/**
+	 * Format book context as a string for inclusion in agent prompts.
+	 * Includes the full TOC with chapter_ids that can be used with get_chapter().
+	 */
+	async getBookContextString(): Promise<string | null> {
+		if (!this.book) return null;
+		
+		const metadata = this.getMetadata();
+		if (!metadata) return null;
+		
+		const toc = await this.getTableOfContentsForAgent();
+		
+		const lines: string[] = [
+			`Book: "${metadata.title}" by ${metadata.author}`,
+			`Approximate pages: ${metadata.totalPages}`,
+			``,
+			`Table of Contents (${toc.filter(item => item.level === 0).length} top-level sections):`,
+			``,
+		];
+		
+		// Include both the id AND a hint about the href for debugging
+		for (const item of toc) {
+			const indent = '  '.repeat(item.level);
+			const title = item.title.trim();
+			// Use the id as the chapter_id (agent will pass this to get_chapter)
+			lines.push(`${indent}- "${title}" (chapter_id: "${item.id}")`);
+		}
+		
+		lines.push('');
+		lines.push('To read a chapter, use: get_chapter(chapter_id) with one of the IDs above.');
+		lines.push('To search for topics: use search_book(query) for semantic search.');
+		
+		return lines.join('\n');
+	}
+
+	private findTocEntryForHref(toc: TocItem[], href: string): TocItem | null {
+		const baseHref = href.split('#')[0];
+		
+		for (const item of toc) {
+			const itemBaseHref = item.href.split('#')[0];
+			if (itemBaseHref === baseHref || item.href.includes(baseHref)) {
+				return item;
+			}
+			if (item.subitems) {
+				const found = this.findTocEntryForHref(item.subitems, href);
+				if (found) return found;
+			}
+		}
+		
+		return null;
+	}
+
+	private extractTitleFromHref(href: string): string {
+		// Extract a readable name from the href
+		const filename = href.split('/').pop() || href;
+		return filename
+			.replace(/\.(x?html?|xml)$/i, '')
+			.replace(/[-_]/g, ' ')
+			.replace(/^\d+\s*/, ''); // Remove leading numbers
+	}
+
 	destroy(): void {
 		if (this.resizeTimeout) {
 			clearTimeout(this.resizeTimeout);

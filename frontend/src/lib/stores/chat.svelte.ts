@@ -4,6 +4,7 @@
  * Provides:
  * - Message state with streaming support
  * - Thread management
+ * - Tool execution status (agent-driven RAG)
  * - Payment integration with CypherTap
  * - Pending payment tracking for refund recovery
  * 
@@ -12,7 +13,16 @@
 
 import type { Message } from '@langchain/langgraph-sdk';
 import { v4 as uuidv4 } from 'uuid';
-import { submitMessage, getThreadMessages, getThreads, deleteThread as deleteThreadApi } from '$lib/services/langgraph';
+import { 
+	submitMessage, 
+	getThreadMessages, 
+	getThreads, 
+	deleteThread as deleteThreadApi,
+	setToolExecutor,
+	type ToolCall,
+	type ToolResult
+} from '$lib/services/langgraph';
+import { executeToolCall } from '$lib/services/agentToolsService';
 import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 
 const MESSAGE_COST_SATS = 1;
@@ -32,6 +42,13 @@ export interface ThreadInfo {
 	title?: string;  // Extracted from first message content
 }
 
+// Tool execution status for UI display
+export interface ToolExecutionStatus {
+	isExecuting: boolean;
+	currentTools: ToolCall[];
+	lastResults: ToolResult[];
+}
+
 interface ChatState {
 	messages: Message[];
 	threadId: string | null;
@@ -41,6 +58,7 @@ interface ChatState {
 	error: string | null;
 	threads: ThreadInfo[];
 	pendingPayment: PendingPayment | null;
+	toolStatus: ToolExecutionStatus;
 }
 
 // Extract title from message content (first ~50 chars of first human message)
@@ -70,6 +88,17 @@ function extractThreadTitle(messages: Message[]): string | undefined {
 	return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
 }
 
+// Map tool names to user-friendly descriptions
+function getToolDescription(toolName: string): string {
+	const descriptions: Record<string, string> = {
+		'get_table_of_contents': 'Reading book structure...',
+		'get_book_metadata': 'Getting book info...',
+		'get_chapter': 'Reading chapter...',
+		'search_book': 'Searching book...',
+	};
+	return descriptions[toolName] || `Running ${toolName}...`;
+}
+
 function createChatStore() {
 	let messages = $state<Message[]>([]);
 	let threadId = $state<string | null>(null);
@@ -81,14 +110,29 @@ function createChatStore() {
 	let streamingContent = $state('');
 	let pendingPayment = $state<PendingPayment | null>(null);
 	
+	// Tool execution status
+	let toolStatus = $state<ToolExecutionStatus>({
+		isExecuting: false,
+		currentTools: [],
+		lastResults: [],
+	});
+	
+	// Current book ID for tool execution
+	let currentBookId = $state<string | null>(null);
+	
 	// Refund callback - set by component that has access to CypherTap
 	let refundCallback: ((token: string) => Promise<boolean>) | null = null;
+
+	// Initialize the tool executor in langgraph service
+	setToolExecutor(executeToolCall);
 
 	async function submit(
 		content: string,
 		options?: {
 			context?: PassageContext;
 			generatePayment?: () => Promise<PaymentInfo | null>;
+			bookId?: string;
+			bookContext?: string;  // Pre-formatted book context (TOC, metadata)
 		}
 	): Promise<boolean> {
 		if (!content.trim() || isLoading) return false;
@@ -97,6 +141,12 @@ function createChatStore() {
 		isLoading = true;
 		isStreaming = true;
 		streamingContent = '';
+		toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
+		
+		// Store book ID for tool execution
+		if (options?.bookId) {
+			currentBookId = options.bookId;
+		}
 
 		const messageId = uuidv4();
 
@@ -145,14 +195,10 @@ function createChatStore() {
 		};
 		messages = [...messages, humanMessage];
 
-		// Add placeholder for streaming AI response
-		const aiMessageId = uuidv4();
-		const aiPlaceholder: Message = {
-			id: aiMessageId,
-			type: 'ai',
-			content: '',
-		};
-		messages = [...messages, aiPlaceholder];
+		// Track the ID of the latest AI message for streaming updates
+		let currentAiMessageId: string | null = null;
+		// Track the human message ID so we can remove it on error
+		const humanMessageId = messageId;
 
 		try {
 			const result = await submitMessage(
@@ -161,29 +207,58 @@ function createChatStore() {
 					threadId,
 					context: options?.context,
 					payment,
+					bookId: options?.bookId || currentBookId || undefined,
+					bookContext: options?.bookContext,
 				},
 				{
 					onToken: (token) => {
 						streamingContent += token;
-						// Update the AI message content
-						messages = messages.map(m =>
-							m.id === aiMessageId
-								? { ...m, content: streamingContent }
-								: m
-						);
+						// Update the latest AI message with streaming content
+						if (currentAiMessageId) {
+							messages = messages.map(m =>
+								m.id === currentAiMessageId
+									? { ...m, content: streamingContent }
+									: m
+							);
+						} else {
+							// No AI message yet - add a placeholder
+							const placeholderId = uuidv4();
+							currentAiMessageId = placeholderId;
+							messages = [...messages, {
+								id: placeholderId,
+								type: 'ai' as const,
+								content: streamingContent,
+							}];
+						}
+					},
+					onMessagesSync: (serverMessages) => {
+						// Sync with server state - this ensures proper message separation
+						// Find the last AI message to track for streaming
+						const lastAi = serverMessages.findLast(m => m.type === 'ai');
+						if (lastAi) {
+							currentAiMessageId = lastAi.id || null;
+							// Reset streaming content to match server state
+							streamingContent = typeof lastAi.content === 'string' ? lastAi.content : '';
+						}
+						messages = [...serverMessages];
 					},
 					onMessage: (message) => {
-						// Update with full message when available
-						messages = messages.map(m =>
-							m.id === aiMessageId
-								? { ...m, ...message, id: aiMessageId }
-								: m
-						);
+						// Update specific message when complete
+						if (message.id && messages.some(m => m.id === message.id)) {
+							messages = messages.map(m =>
+								m.id === message.id ? { ...m, ...message } : m
+							);
+						}
 					},
 					onComplete: (finalMessages, refund) => {
-						// Replace with final state from server
-						messages = finalMessages;
+						// Merge final messages with our current messages
+						// This preserves streaming content while adding server-side messages (like tool results)
+						if (finalMessages && finalMessages.length > 0) {
+							// Use final messages as source of truth, but they should be mostly in sync
+							messages = finalMessages;
+						}
 						isStreaming = false;
+						toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 						
 						if (refund) {
 							// Agent signaled refund needed
@@ -197,9 +272,12 @@ function createChatStore() {
 					},
 					onError: (err) => {
 						error = err.message;
-						// Remove the placeholder AI message on error
-						messages = messages.filter(m => m.id !== aiMessageId);
+						// Remove any incomplete AI message on error
+						if (currentAiMessageId) {
+							messages = messages.filter(m => m.id !== currentAiMessageId);
+						}
 						isStreaming = false;
+						toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 						// Attempt refund on error
 						attemptRefund('onError callback');
 					},
@@ -213,6 +291,35 @@ function createChatStore() {
 						// Refresh threads list
 						loadThreads();
 					},
+					// Tool execution callbacks - update UI in real-time
+					onToolCall: (tools) => {
+						console.log('[Chat] Tool calls detected:', tools.map(t => t.name));
+						toolStatus = {
+							isExecuting: true,
+							currentTools: tools,
+							lastResults: [],
+						};
+						// Update the AI message to show it's thinking/using tools
+						// This provides visual feedback before tools execute
+					},
+					onToolExecuting: (tools) => {
+						console.log('[Chat] Executing tools:', tools.map(t => t.name));
+						toolStatus = {
+							...toolStatus,
+							isExecuting: true,
+							currentTools: tools,
+						};
+					},
+					onToolComplete: (results) => {
+						console.log('[Chat] Tools completed:', results.map(r => ({ id: r.id, hasError: !!r.error })));
+						// Keep isExecuting true - the agent is still processing
+						// Only set to false on final completion
+						toolStatus = {
+							isExecuting: true, // Still processing, just this round of tools done
+							currentTools: [],
+							lastResults: results,
+						};
+					},
 				}
 			);
 
@@ -221,10 +328,14 @@ function createChatStore() {
 			return true;
 		} catch (e) {
 			error = (e as Error).message;
-			// Remove placeholder on error
-			messages = messages.filter(m => m.id !== aiMessageId);
+			// Remove incomplete AI messages (those with empty content from failed streaming)
+			messages = messages.filter(m => {
+				if (m.type === 'ai' && !m.content) return false;
+				return true;
+			});
 			isLoading = false;
 			isStreaming = false;
+			toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 			// Attempt refund on error
 			await attemptRefund('catch block');
 			return false;
@@ -360,6 +471,7 @@ function createChatStore() {
 		threadId = null;
 		error = null;
 		streamingContent = '';
+		toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 	}
 
 	async function deleteThread(id: string): Promise<void> {
@@ -384,6 +496,11 @@ function createChatStore() {
 		// TODO: Implement abort controller for streaming
 		isLoading = false;
 		isStreaming = false;
+		toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
+	}
+	
+	function setBookId(bookId: string): void {
+		currentBookId = bookId;
 	}
 
 	return {
@@ -396,6 +513,8 @@ function createChatStore() {
 		get threads() { return threads; },
 		get streamingContent() { return streamingContent; },
 		get pendingPayment() { return pendingPayment; },
+		get toolStatus() { return toolStatus; },
+		get currentBookId() { return currentBookId; },
 		
 		submit,
 		loadThread,
@@ -407,6 +526,8 @@ function createChatStore() {
 		setRefundCallback,
 		recoverPendingPayment,
 		extractThreadTitle,
+		setBookId,
+		getToolDescription,
 		
 		setThreadId: (id: string | null) => { threadId = id; },
 	};

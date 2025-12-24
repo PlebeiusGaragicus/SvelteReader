@@ -45,7 +45,8 @@
 	}
 </script>
 
-<div class="flex h-full flex-col">
+<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+<div class="flex h-full flex-col" onclick={(e) => e.stopPropagation()}>
 	<div class="flex-1 overflow-y-auto p-2">
 		{#if isLoading}
 			<!-- Loading skeleton -->
@@ -68,10 +69,13 @@
 					<div
 						class="group relative flex items-center rounded-lg px-3 py-2 transition-colors {currentThreadId === thread.thread_id ? 'bg-accent' : 'hover:bg-muted'}"
 					>
-						<button
-							onclick={() => onSelectThread(thread.thread_id)}
-							class="flex flex-1 flex-col items-start gap-0.5 text-left"
-						>
+					<button
+						onclick={(e) => {
+							e.stopPropagation();
+							onSelectThread(thread.thread_id);
+						}}
+						class="flex flex-1 flex-col items-start gap-0.5 text-left"
+					>
 							<span class="line-clamp-1 text-sm">
 								{getThreadTitle(thread)}
 							</span>

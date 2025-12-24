@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Message } from '@langchain/langgraph-sdk';
-	import { Bot, X, ChevronLeft, SquarePen, AlertCircle, Trash2 } from '@lucide/svelte';
+	import { Bot, X, ChevronLeft, SquarePen, AlertCircle, Trash2, Search, BookOpen, FileText, Loader2 } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
 	import { useChatStore } from '$lib/stores/chat.svelte';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { checkHealth } from '$lib/services/langgraph';
+	import { epubService } from '$lib/services/epubService';
+	import { indexingStore } from '$lib/stores/indexing.svelte';
 	import { DO_NOT_RENDER_ID_PREFIX } from '$lib/types/chat';
 	import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 	import ChatInput from './ChatInput.svelte';
@@ -30,9 +32,12 @@
 		onThreadChange?: (threadId: string | null) => void;
 		onThreadDelete?: (threadId: string) => void;
 		generatePayment?: () => Promise<PaymentInfo | null>;
+		bookId?: string;  // Required for agent tools to access book content
+		debugMode?: boolean;  // Skip real payments in debug mode
+		disableClickOutside?: boolean;  // Disable click-outside handler (e.g., during resize)
 	}
 
-	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment }: Props = $props();
+	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment, bookId, debugMode = false, disableClickOutside = false }: Props = $props();
 
 	const chat = useChatStore();
 	const wallet = useWalletStore();
@@ -66,9 +71,21 @@
 
 	// Click outside to close
 	function handleClickOutside(event: MouseEvent) {
-		if (panelElement && !panelElement.contains(event.target as Node)) {
-			onClose?.();
+		// Ignore if click-outside is disabled (e.g., during resize)
+		if (disableClickOutside) {
+			return;
 		}
+		
+		const target = event.target as Node;
+		// Ignore if target is no longer in DOM (happens during view transitions)
+		if (!document.body.contains(target)) {
+			return;
+		}
+		// Ignore if click is inside the panel
+		if (panelElement && panelElement.contains(target)) {
+			return;
+		}
+		onClose?.();
 	}
 
 	// Check backend health on mount and set up refund callback
@@ -179,9 +196,20 @@
 
 	async function handleSubmit(content: string) {
 		const previousThreadId = chat.threadId;
+		
+		// In debug mode, use a fake payment generator that returns a dummy token
+		const paymentGenerator = debugMode 
+			? async () => ({ ecash_token: 'cashu_debug_token_not_real', amount_sats: 1 } as PaymentInfo)
+			: generatePayment;
+		
+		// Get book context (TOC, metadata) so agent knows how to use tools
+		const bookContext = await epubService.getBookContextString();
+		
 		await chat.submit(content, {
 			context: passageContext,
-			generatePayment,
+			generatePayment: paymentGenerator,
+			bookId,  // Pass bookId for agent tool execution
+			bookContext: bookContext || undefined,  // Pass book context if available
 		});
 		// Notify parent if a new thread was created
 		if (chat.threadId && chat.threadId !== previousThreadId) {
@@ -332,6 +360,14 @@
 					<p class="text-xs">LangGraph server unavailable. Start the server to enable AI chat.</p>
 				</div>
 			{/if}
+			
+			<!-- Indexing status indicator in chat -->
+			{#if indexingStore.isIndexing}
+				<div class="mx-4 mt-2 flex items-center gap-2 rounded-md bg-primary/5 px-3 py-1.5 text-primary">
+					<Loader2 class="h-3 w-3 animate-spin flex-shrink-0" />
+					<p class="text-xs">Indexing book for search... {indexingStore.progressPercent}% - chapter reading is available</p>
+				</div>
+			{/if}
 
 			<!-- Passage Context Display -->
 			{#if passageContext}
@@ -385,7 +421,24 @@
 							{/if}
 						{/each}
 
-						{#if chat.isLoading && !chat.isStreaming}
+						{#if chat.toolStatus.isExecuting}
+							<!-- Tool Execution Status -->
+							<div class="flex justify-start gap-3">
+								<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
+									<Search class="h-4 w-4 animate-pulse text-primary" />
+								</div>
+								<div class="rounded-2xl rounded-bl-md bg-primary/5 border border-primary/20 px-4 py-3">
+									<div class="flex items-center gap-2 text-sm text-primary">
+										<Loader2 class="h-4 w-4 animate-spin" />
+										<span>
+											{#each chat.toolStatus.currentTools as tool, i}
+												{chat.getToolDescription(tool.name)}{i < chat.toolStatus.currentTools.length - 1 ? ', ' : ''}
+											{/each}
+										</span>
+									</div>
+								</div>
+							</div>
+						{:else if chat.isLoading && !chat.isStreaming}
 							<div class="flex justify-start gap-3">
 								<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">
 									<Bot class="h-4 w-4 text-muted-foreground" />

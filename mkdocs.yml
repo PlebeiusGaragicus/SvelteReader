@@ -1,8 +1,8 @@
-site_name: Seed
-site_description: A proof-of-concept of a nostr-native website that accepts 
-site_url: https://PlebeiusGaragicus.github.io/seed/
-repo_url: https://github.com/PlebeiusGaragicus/seed
-repo_name: seed
+site_name: SvelteReader
+site_description: A nostr-native ebook reader with AI-powered annotations and ecash micropayments
+site_url: https://yourorg.github.io/SvelteReader/
+repo_url: https://github.com/yourorg/SvelteReader
+repo_name: SvelteReader
 
 theme:
   name: material
@@ -23,6 +23,7 @@ theme:
     - navigation.instant
     - navigation.tracking
     - navigation.sections
+    - navigation.expand
     - content.code.copy
 
 markdown_extensions:
@@ -34,9 +35,27 @@ markdown_extensions:
   - admonition
   - pymdownx.details
   - tables
+  - toc:
+      permalink: true
 
 nav:
-  - Overview: index.md
-  - Architecture: architecture.md
-  - Deployment: deployment.md
-  - Testing: testing.md
+  - Home: index.md
+  - Getting Started:
+    - Setup Guide: setup.md
+    - Features: features.md
+  - Architecture:
+    - Overview: architecture.md
+    - Design Decisions: design-decisions.md
+    - Refactoring Guide: refactoring.md
+  - Technical Guides:
+    - Agent RAG Architecture: agent-rag-architecture.md
+    - AI Chat Integration: ai-chat-integration.md
+    - Ecash Payment Flow: ecash-payment-flow.md
+    - Annotation Sync: annotation-sync-design.md
+    - Book Sync: book-sync-design.md
+    - Spectating: spectating.md
+  - Development:
+    - Testing: testing.md
+    - Deployment: deployment.md
+    - Chat Refactor: chat-refactor.md
+    - Roadmap: roadmap.md
