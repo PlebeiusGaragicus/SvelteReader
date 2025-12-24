@@ -122,6 +122,7 @@ export interface LocationInfo {
 	percentage: number;
 	page: number;
 	totalPages: number;
+	chapterTitle?: string;
 }
 
 export interface TocItem {

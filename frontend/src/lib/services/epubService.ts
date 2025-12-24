@@ -51,6 +51,7 @@ class EpubService {
 	private pageTurnCallback: (() => void) | null = null;
 	private loadedAnnotations: AnnotationLocal[] = [];
 	private renderedListenerAttached: boolean = false;
+	private toc: TocItem[] = [];  // Cached table of contents for quick lookups
 	async parseEpub(file: File): Promise<ParsedBook> {
 		const arrayBuffer = await file.arrayBuffer();
 		const book = ePub(arrayBuffer);
@@ -321,8 +322,37 @@ class EpubService {
 	async getTableOfContents(): Promise<TocItem[]> {
 		if (!this.book) return [];
 
+		// Return cached TOC if available
+		if (this.toc.length > 0) return this.toc;
+
 		const navigation = await this.book.loaded.navigation;
-		return this.convertNavItems(navigation.toc);
+		this.toc = this.convertNavItems(navigation.toc);
+		return this.toc;
+	}
+	
+	/**
+	 * Get chapter title by ID from the cached TOC.
+	 * Returns null if TOC not loaded or chapter not found.
+	 */
+	getChapterTitleById(chapterId: string): string | null {
+		if (this.toc.length === 0) return null;
+		
+		// Recursive search through TOC
+		const findTitle = (items: TocItem[]): string | null => {
+			for (const item of items) {
+				// Match by id or href (some books use href as id)
+				if (item.id === chapterId || item.href === chapterId || item.href?.includes(chapterId)) {
+					return item.label;
+				}
+				if (item.subitems && item.subitems.length > 0) {
+					const found = findTitle(item.subitems);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		
+		return findTitle(this.toc);
 	}
 
 	/**
@@ -465,6 +495,18 @@ class EpubService {
 		if (!location || !location.start) return null;
 
 		const cfi = location.start.cfi;
+		
+		// Try to get chapter title from cached TOC
+		let chapterTitle: string | undefined;
+		const spineIndex = location.start.index || 0;
+		const spine = (this.book.spine as any);
+		const spineItem = spine?.items?.[spineIndex] || spine?.get?.(spineIndex);
+		const href = spineItem?.href || '';
+		
+		if (href && this.toc.length > 0) {
+			const tocEntry = this.findTocEntryForHref(this.toc, href);
+			chapterTitle = tocEntry?.label || this.extractTitleFromHref(href);
+		}
 
 		// If locations are ready, use accurate progress
 		if (this.locationsReady && this.totalLocations > 0) {
@@ -476,13 +518,12 @@ class EpubService {
 				cfi,
 				percentage: Math.round(percentage * 100),
 				page,
-				totalPages: this.totalLocations
+				totalPages: this.totalLocations,
+				chapterTitle
 			};
 		}
 
 		// Fallback: estimate based on spine position
-		const spineIndex = location.start.index || 0;
-		const spine = (this.book.spine as any);
 		const spineLength = spine?.items?.length || spine?.length || 1;
 		const percentage = Math.round((spineIndex / spineLength) * 100);
 
@@ -490,7 +531,8 @@ class EpubService {
 			cfi,
 			percentage,
 			page: spineIndex + 1,
-			totalPages: spineLength
+			totalPages: spineLength,
+			chapterTitle
 		};
 	}
 
@@ -1321,13 +1363,9 @@ class EpubService {
 			`Approximate pages: ${metadata.totalPages}`,
 		];
 		
-		// Add current reading position if available
-		if (pageInfo) {
-			if (pageInfo.chapterTitle) {
-				lines.push(`User is currently reading: "${pageInfo.chapterTitle}" (${pageInfo.percentage}% through the book)`);
-			} else {
-				lines.push(`User's reading progress: ${pageInfo.percentage}% through the book`);
-			}
+		// Add current reading position if available (chapter title only, not percentage)
+		if (pageInfo && pageInfo.chapterTitle) {
+			lines.push(`User is currently reading: "${pageInfo.chapterTitle}"`);
 		}
 		
 		lines.push('');
@@ -1368,7 +1406,7 @@ class EpubService {
 
 	/**
 	 * Get information about the current reading position.
-	 * Returns chapter name, progress, and visible text on the current page.
+	 * Returns chapter name, progress percentage, and visible text on the current page.
 	 */
 	async getCurrentPageInfo(): Promise<{
 		chapterTitle: string | null;
@@ -1386,14 +1424,22 @@ class EpubService {
 		const spine = (this.book.spine as any);
 		const spineItem = spine?.items?.[spineIndex] || spine?.get?.(spineIndex);
 		const href = spineItem?.href || '';
+		
+		// Calculate percentage progress
+		let percentage = 0;
+		if (this.locationsReady && this.totalLocations > 0) {
+			const cfi = location.start.cfi;
+			const locationIndex = this.book.locations.locationFromCfi(cfi) as unknown as number;
+			percentage = Math.round((locationIndex / this.totalLocations) * 100);
+		} else {
+			// Fallback to spine-based percentage
+			const spineLength = spine?.items?.length || spine?.length || 1;
+			percentage = Math.round((spineIndex / spineLength) * 100);
+		}
 
 		// Find matching TOC entry
 		const toc = await this.getTableOfContents();
 		const tocEntry = this.findTocEntryForHref(toc, href);
-
-		// Get location info
-		const locationInfo = this.getCurrentLocation();
-		const percentage = locationInfo?.percentage || 0;
 
 		// Get visible text from the current page
 		let visibleText: string | null = null;
@@ -1451,6 +1497,7 @@ class EpubService {
 		this.onLocationsReady = null;
 		this.loadedAnnotations = [];
 		this.renderedListenerAttached = false;
+		this.toc = [];
 	}
 }
 

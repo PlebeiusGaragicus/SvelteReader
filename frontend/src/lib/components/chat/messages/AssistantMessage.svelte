@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Message } from '@langchain/langgraph-sdk';
-	import { Bot, RefreshCw, Copy, Check } from '@lucide/svelte';
+	import { Bot, RefreshCw, Copy, Check, BookOpen, Search, FileText } from '@lucide/svelte';
 	import MarkdownRenderer from '../MarkdownRenderer.svelte';
+	import { epubService } from '$lib/services/epubService';
 
 	interface Props {
 		message: Message;
@@ -14,6 +15,9 @@
 	let { message, isLoading = false, isStreaming = false, onRegenerate, hideToolCalls = false }: Props = $props();
 
 	let copied = $state(false);
+	
+	// Cache for chapter ID to title lookups (non-reactive, just for memoization)
+	const chapterTitleCache: Record<string, string> = {};
 
 	const content = $derived(
 		typeof message.content === 'string'
@@ -31,6 +35,53 @@
 	);
 
 	const hasToolCalls = $derived(toolCalls.length > 0);
+	
+	/**
+	 * Look up chapter title from TOC by ID
+	 */
+	function getChapterTitle(chapterId: string): string {
+		// Check cache first
+		if (chapterTitleCache[chapterId]) {
+			return chapterTitleCache[chapterId];
+		}
+		
+		// Try to look up in TOC (synchronously from cached TOC)
+		const title = epubService.getChapterTitleById(chapterId);
+		if (title) {
+			chapterTitleCache[chapterId] = title;
+			return title;
+		}
+		
+		// Fallback: make the ID more readable
+		return chapterId
+			.replace(/[-_]/g, ' ')
+			.replace(/\.(x?html?|xml)$/i, '')
+			.replace(/^\d+\s*/, '');
+	}
+
+	/**
+	 * Format tool call for display with user-friendly text
+	 */
+	function formatToolCall(toolCall: any): { icon: typeof BookOpen; text: string } {
+		switch (toolCall.name) {
+			case 'get_chapter': {
+				const chapterId = toolCall.args?.chapter_id || 'content';
+				const chapterTitle = getChapterTitle(chapterId);
+				return { icon: BookOpen, text: `Reading "${chapterTitle}"...` };
+			}
+			case 'search_book': {
+				const queries = toolCall.args?.queries || [toolCall.args?.query] || ['content'];
+				const queryText = Array.isArray(queries) 
+					? queries.slice(0, 2).map((q: string) => `"${q}"`).join(', ') + (queries.length > 2 ? '...' : '')
+					: `"${queries}"`;
+				return { icon: Search, text: `Searching for ${queryText}` };
+			}
+			case 'get_current_page':
+				return { icon: FileText, text: 'Reading the current page...' };
+			default:
+				return { icon: BookOpen, text: `Using ${toolCall.name}...` };
+		}
+	}
 
 	async function copyToClipboard() {
 		try {
@@ -42,6 +93,7 @@
 		}
 	}
 </script>
+
 
 <div class="flex justify-start gap-3">
 	<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">
@@ -66,11 +118,12 @@
 
 		<!-- Tool calls come AFTER the content (showing what tools were used) -->
 		{#if hasToolCalls && !hideToolCalls}
-			<div class="flex flex-col gap-1">
+			<div class="flex flex-col gap-1.5">
 				{#each toolCalls as toolCall}
-					<div class="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs">
-						<span class="font-medium text-muted-foreground">Tool: </span>
-						<span class="font-mono">{toolCall.name}</span>
+					{@const formatted = formatToolCall(toolCall)}
+					<div class="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+						<svelte:component this={formatted.icon} class="h-4 w-4 shrink-0" />
+						<span>{formatted.text}</span>
 					</div>
 				{/each}
 			</div>

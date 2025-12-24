@@ -214,16 +214,33 @@ function createChatStore() {
 				{
 					onToken: (token) => {
 						streamingContent += token;
-						// Only update if we have a NEW message ID from the server
-						// Don't stream to old messages from previous iterations
+						
+						// Update the message if we have an ID
 						if (currentAiMessageId) {
 							messages = messages.map(m =>
 								m.id === currentAiMessageId
 									? { ...m, content: streamingContent }
 									: m
 							);
+						} else {
+							// No AI message ID yet - create a temporary streaming placeholder
+							// This will be replaced when onMessagesSync arrives with the real message
+							const existingPlaceholder = messages.find(m => m.id === 'streaming-placeholder');
+							if (existingPlaceholder) {
+								messages = messages.map(m =>
+									m.id === 'streaming-placeholder'
+										? { ...m, content: streamingContent }
+										: m
+								);
+							} else {
+								// Add a placeholder for streaming content
+								messages = [...messages, {
+									id: 'streaming-placeholder',
+									type: 'ai',
+									content: streamingContent,
+								} as any];
+							}
 						}
-						// If no AI message yet, tokens will be applied when onMessagesSync arrives
 					},
 					onIterationStart: (iteration) => {
 						// Reset streaming state for new iteration
@@ -245,9 +262,17 @@ function createChatStore() {
 							if (!knownAiMessageIds.has(lastAi.id)) {
 								// New message! Start streaming to it
 								currentAiMessageId = lastAi.id;
-								// Reset streaming content to match server state
-								const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
-								streamingContent = serverContent;
+								
+								// If we have streamed content from before the ID arrived, preserve it
+								// Otherwise use server content
+								if (streamingContent && streamingContent.length > 0) {
+									// We already have streaming content - keep it
+									// The server message may have less content than what we've streamed
+								} else {
+									// Reset streaming content to match server state
+									const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
+									streamingContent = serverContent;
+								}
 							}
 							// If it's a known message, keep currentAiMessageId as null - don't stream to old messages
 						} else if (!lastAi) {
@@ -255,7 +280,18 @@ function createChatStore() {
 							currentAiMessageId = null;
 							streamingContent = '';
 						}
-						messages = [...serverMessages];
+						
+						// Remove any placeholder and replace with server messages
+						// But apply our streaming content to the last AI message
+						let mergedMessages = serverMessages.filter(m => m.id !== 'streaming-placeholder');
+						if (currentAiMessageId && streamingContent) {
+							mergedMessages = mergedMessages.map(m =>
+								m.id === currentAiMessageId
+									? { ...m, content: streamingContent }
+									: m
+							);
+						}
+						messages = [...mergedMessages];
 					},
 					onMessage: (message) => {
 						// Update specific message when complete
