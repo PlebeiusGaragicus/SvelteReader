@@ -45,51 +45,46 @@ from langgraph.prebuilt import ToolNode
 
 @tool
 def get_table_of_contents() -> str:
-    """Get the table of contents for the current book.
-    
-    Returns a structured list of chapters with their IDs, titles, and hierarchy.
-    Use this to understand the book structure before retrieving specific chapters.
-    """
+    """Get the table of contents. Usually NOT needed - the TOC with chapter_ids is already in your system prompt under 'BOOK INFORMATION'."""
     # Never actually called - graph interrupts before execution
     return ""
 
 
 @tool
 def get_book_metadata() -> str:
-    """Get metadata about the current book.
-    
-    Returns title, author, publication info, and total page count.
-    Use this to provide context about the book being discussed.
-    """
+    """Get book metadata (title, author, page count). Usually NOT needed - this info is already in your system prompt."""
     return ""
 
 
 @tool
 def get_chapter(chapter_id: str) -> str:
-    """Get the full text content of a specific chapter.
+    """Read a chapter's full text content.
+    
+    IMPORTANT: Use the EXACT chapter_id from the Table of Contents in your system prompt.
+    Example IDs look like: "chapter-1.xhtml", "ch01.html", "part1.xhtml"
     
     Args:
-        chapter_id: The chapter identifier from the table of contents.
-                   Use get_table_of_contents() first to find valid chapter IDs.
+        chapter_id: The exact chapter_id string from the Table of Contents (e.g. "chapter-1.xhtml")
     
-    Returns the complete chapter text. Use for detailed analysis, 
-    summarization, or when you need full chapter context.
-    Note: Very long chapters may be truncated.
+    Returns: The chapter's full text. Long chapters may be truncated.
     """
     return ""
 
 
 @tool
 def search_book(query: str, top_k: int = 5) -> str:
-    """Semantic search across the entire book.
+    """Semantic search across the entire book to find relevant passages.
+    
+    Use this to find:
+    - Specific topics or themes
+    - Quotes or references
+    - Where a concept is discussed
     
     Args:
-        query: Natural language search query describing what you're looking for.
-               Be specific to get better results.
-        top_k: Number of results to return (default 5, max 20).
+        query: What you're looking for (e.g. "discussion of freedom", "character introduction")
+        top_k: Number of results (default 5, max 20)
     
-    Returns passages ranked by relevance with chapter titles and approximate locations.
-    Use this to find specific topics, quotes, or themes mentioned anywhere in the book.
+    Returns: Relevant text passages with their chapter locations and relevance scores.
     """
     return ""
 
@@ -122,6 +117,7 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     passage_context: PassageContext | None
     book_id: str | None  # Current book ID for tool execution
+    book_context: str | None  # Pre-formatted book context (TOC, metadata) from client
     payment: PaymentInfo | None
     payment_validated: bool  # Token checked but not redeemed
     payment_token: str | None  # Token to redeem on success
@@ -132,38 +128,47 @@ class AgentState(TypedDict):
 # SYSTEM PROMPT
 # =============================================================================
 
-def get_system_prompt(context: PassageContext | None) -> str:
-    """Generate a system prompt based on the passage context."""
+def get_system_prompt(
+    passage_context: PassageContext | None,
+    book_context: str | None
+) -> str:
+    """Generate a system prompt based on the passage and book context."""
     base_prompt = """You are a reading assistant with access to the user's ebook.
 
 You have tools to explore the book:
-- get_table_of_contents(): See the book structure and chapter IDs
-- get_chapter(chapter_id): Read a full chapter's content
-- search_book(query): Find relevant passages by semantic search
-- get_book_metadata(): Get book title, author, and page count
+- get_chapter(chapter_id): Read a full chapter's content. Use the EXACT chapter_id from the table of contents below.
+- search_book(query): Semantic search across the entire book. Use this to find specific topics or quotes.
+- get_book_metadata(): Get book title, author, and page count.
+- get_table_of_contents(): Get chapter list (usually not needed since TOC is provided below).
 
 IMPORTANT GUIDELINES:
-1. Use these tools to answer questions accurately - don't guess or make up content
-2. For summarization tasks, first get the table of contents, then retrieve specific chapters
-3. For topic questions, search the book first to find relevant passages
-4. Always cite your sources with chapter names when possible
-5. If a chapter is very long, you may receive truncated content - mention this if relevant
+1. ALWAYS use the exact chapter_id values from the Table of Contents below when calling get_chapter()
+2. For summarization: retrieve specific chapters using get_chapter() with the IDs from the TOC
+3. For finding topics/quotes: use search_book() first to locate relevant passages
+4. Cite your sources with chapter names
+5. Long chapters may be truncated - use search_book() to find specific content within them
+6. Don't guess chapter IDs - only use ones from the Table of Contents
 
 Be concise but thorough. If you can't find information in the book, say so clearly."""
 
-    if context:
+    # Add book context (TOC, metadata) - this is the key info the agent needs
+    if book_context:
+        base_prompt += f"\n\n=== BOOK INFORMATION ===\n{book_context}\n=== END BOOK INFO ==="
+
+    # Add passage context if user highlighted text
+    if passage_context:
         context_parts = []
-        if context.get("book_title"):
-            context_parts.append(f"Book: {context['book_title']}")
-        if context.get("chapter"):
-            context_parts.append(f"Current Chapter: {context['chapter']}")
-        if context.get("text"):
-            context_parts.append(f'\nHighlighted passage:\n"{context["text"]}"')
-        if context.get("note"):
-            context_parts.append(f"\nUser's note: {context['note']}")
+        if passage_context.get("book_title"):
+            context_parts.append(f"Book: {passage_context['book_title']}")
+        if passage_context.get("chapter"):
+            context_parts.append(f"Current Chapter: {passage_context['chapter']}")
+        if passage_context.get("text"):
+            context_parts.append(f'\nHighlighted passage:\n"{passage_context["text"]}"')
+        if passage_context.get("note"):
+            context_parts.append(f"\nUser's note: {passage_context['note']}")
 
         if context_parts:
-            base_prompt += "\n\n--- Current Context ---\n" + "\n".join(context_parts)
+            base_prompt += "\n\n--- User's Current Selection ---\n" + "\n".join(context_parts)
 
     return base_prompt
 
@@ -348,11 +353,16 @@ async def agent_node(state: AgentState) -> dict:
         # Bind tools to the model
         model_with_tools = model.bind_tools(CLIENT_TOOLS)
         
-        # Build messages with system prompt
-        system_prompt = get_system_prompt(state.get("passage_context"))
+        # Build messages with system prompt (includes book context with TOC)
+        system_prompt = get_system_prompt(
+            state.get("passage_context"),
+            state.get("book_context")
+        )
         messages = [SystemMessage(content=system_prompt)] + state["messages"]
         
-        print("[Agent] Invoking LLM...")
+        # Log book context availability for debugging
+        has_book_context = bool(state.get("book_context"))
+        print(f"[Agent] Invoking LLM... (book_context: {has_book_context})")
         response = await model_with_tools.ainvoke(messages)
         print(f"[Agent] LLM response received. Has tool calls: {bool(response.tool_calls)}")
         

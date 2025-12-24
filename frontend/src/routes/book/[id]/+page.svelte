@@ -734,7 +734,7 @@
 					initialThreadId={chatInitialThreadId || undefined}
 					{generatePayment}
 					bookId={book?.sha256}
-					debugMode={false}
+					debugMode={import.meta.env.VITE_DEBUG === 'true' || import.meta.env.DEV}
 					onThreadChange={async (threadId) => {
 						// Update the annotation with the new thread ID (preserve other properties)
 						if (book && threadId && chatCfiRange) {

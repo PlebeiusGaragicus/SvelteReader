@@ -6,6 +6,7 @@
 	import { useChatStore } from '$lib/stores/chat.svelte';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { checkHealth } from '$lib/services/langgraph';
+	import { epubService } from '$lib/services/epubService';
 	import { DO_NOT_RENDER_ID_PREFIX } from '$lib/types/chat';
 	import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 	import ChatInput from './ChatInput.svelte';
@@ -194,10 +195,14 @@
 			? async () => ({ ecash_token: 'cashu_debug_token_not_real', amount_sats: 1 } as PaymentInfo)
 			: generatePayment;
 		
+		// Get book context (TOC, metadata) so agent knows how to use tools
+		const bookContext = await epubService.getBookContextString();
+		
 		await chat.submit(content, {
 			context: passageContext,
 			generatePayment: paymentGenerator,
 			bookId,  // Pass bookId for agent tool execution
+			bookContext: bookContext || undefined,  // Pass book context if available
 		});
 		// Notify parent if a new thread was created
 		if (chat.threadId && chat.threadId !== previousThreadId) {

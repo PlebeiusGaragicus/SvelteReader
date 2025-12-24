@@ -132,6 +132,7 @@ function createChatStore() {
 			context?: PassageContext;
 			generatePayment?: () => Promise<PaymentInfo | null>;
 			bookId?: string;
+			bookContext?: string;  // Pre-formatted book context (TOC, metadata)
 		}
 	): Promise<boolean> {
 		if (!content.trim() || isLoading) return false;
@@ -211,6 +212,7 @@ function createChatStore() {
 					context: options?.context,
 					payment,
 					bookId: options?.bookId || currentBookId || undefined,
+					bookContext: options?.bookContext,
 				},
 				{
 					onToken: (token) => {

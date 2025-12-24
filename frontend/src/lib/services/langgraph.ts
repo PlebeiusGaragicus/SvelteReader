@@ -62,6 +62,7 @@ export interface SubmitOptions {
 	context?: PassageContext;
 	payment?: PaymentInfo;
 	bookId?: string;  // Required for tool execution
+	bookContext?: string;  // Pre-formatted book context (TOC, metadata) for agent
 	streamMode?: ('values' | 'messages' | 'updates')[];
 	maxToolIterations?: number;  // Prevent infinite loops (default: 10)
 }
@@ -142,6 +143,11 @@ export async function submitMessage(
 	
 	if (options.bookId) {
 		input.book_id = options.bookId;
+	}
+	
+	// Include book context (TOC, metadata) so agent knows how to use tools
+	if (options.bookContext) {
+		input.book_context = options.bookContext;
 	}
 	
 	const messages: Message[] = [];

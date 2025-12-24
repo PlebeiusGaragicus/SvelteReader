@@ -858,6 +858,11 @@ class EpubService {
 	/**
 	 * Get the full text content of a chapter by its ID/href.
 	 * Used by the AI agent's get_chapter tool.
+	 * 
+	 * The chapterId can be:
+	 * - A TOC nav ID (e.g., "np-5") - will be resolved to href via TOC lookup
+	 * - A spine href or partial href (e.g., "chapter5.xhtml")
+	 * - A spine idref
 	 */
 	async getChapterText(chapterId: string): Promise<string> {
 		if (!this.book) throw new Error('No book loaded');
@@ -865,27 +870,57 @@ class EpubService {
 		const spine = this.book.spine as any;
 		const items = spine?.items || [];
 		
-		// Find the spine item matching this chapter
-		const item = items.find((i: any) => 
+		// First, try to find by direct spine match
+		let item = items.find((i: any) => 
 			i.href?.includes(chapterId) || 
 			i.idref === chapterId ||
 			i.id === chapterId
 		);
 		
+		// If not found, try resolving via TOC (nav ID -> href)
 		if (!item) {
-			// Try a more lenient search
+			const tocHref = await this.resolveTocIdToHref(chapterId);
+			if (tocHref) {
+				const baseHref = tocHref.split('#')[0];
+				item = items.find((i: any) => 
+					i.href === baseHref || 
+					i.href?.endsWith(baseHref) ||
+					baseHref.endsWith(i.href)
+				);
+			}
+		}
+		
+		// Try a more lenient fuzzy search
+		if (!item) {
 			const lowerChapterId = chapterId.toLowerCase();
-			const fuzzyMatch = items.find((i: any) => 
+			item = items.find((i: any) => 
 				i.href?.toLowerCase().includes(lowerChapterId) ||
 				i.idref?.toLowerCase().includes(lowerChapterId)
 			);
-			if (!fuzzyMatch) {
-				throw new Error(`Chapter not found: ${chapterId}`);
-			}
-			return this.extractTextFromSpineItem(fuzzyMatch);
+		}
+		
+		if (!item) {
+			// Log available items for debugging
+			console.error(`[EpubService] Chapter not found: ${chapterId}`);
+			console.error(`[EpubService] Available spine items:`, items.map((i: any) => ({
+				href: i.href,
+				idref: i.idref,
+				id: i.id
+			})));
+			throw new Error(`Chapter not found: ${chapterId}`);
 		}
 		
 		return this.extractTextFromSpineItem(item);
+	}
+
+	/**
+	 * Resolve a TOC navigation ID to its corresponding href.
+	 * TOC items have IDs like "np-5" that map to hrefs like "xhtml/chapter5.xhtml"
+	 */
+	private async resolveTocIdToHref(tocId: string): Promise<string | null> {
+		const toc = await this.getTableOfContentsForAgent();
+		const entry = toc.find(item => item.id === tocId);
+		return entry?.href || null;
 	}
 
 	/**
@@ -997,6 +1032,55 @@ class EpubService {
 		}
 		
 		return result;
+	}
+
+	/**
+	 * Get comprehensive book context for the AI agent.
+	 * This provides all the information the agent needs to use tools effectively.
+	 */
+	async getBookContext(): Promise<{
+		metadata: { title: string; author: string; totalPages: number };
+		tableOfContents: Array<{ id: string; title: string; level: number }>;
+		chapterCount: number;
+	} | null> {
+		if (!this.book) return null;
+		
+		const metadata = this.getMetadata();
+		if (!metadata) return null;
+		
+		const toc = await this.getTableOfContentsForAgent();
+		
+		return {
+			metadata,
+			tableOfContents: toc.map(item => ({
+				id: item.id,
+				title: item.title,
+				level: item.level,
+			})),
+			chapterCount: toc.filter(item => item.level === 0).length,
+		};
+	}
+
+	/**
+	 * Format book context as a string for inclusion in agent prompts.
+	 */
+	async getBookContextString(): Promise<string | null> {
+		const context = await this.getBookContext();
+		if (!context) return null;
+		
+		const lines: string[] = [
+			`Book: "${context.metadata.title}" by ${context.metadata.author}`,
+			`Approximate pages: ${context.metadata.totalPages}`,
+			``,
+			`Table of Contents (${context.chapterCount} chapters):`,
+		];
+		
+		for (const item of context.tableOfContents) {
+			const indent = '  '.repeat(item.level);
+			lines.push(`${indent}- "${item.title}" (chapter_id: "${item.id}")`);
+		}
+		
+		return lines.join('\n');
 	}
 
 	private findTocEntryForHref(toc: TocItem[], href: string): TocItem | null {
