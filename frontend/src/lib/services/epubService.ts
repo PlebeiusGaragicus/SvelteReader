@@ -1595,109 +1595,185 @@ class EpubService {
 				return { cfiRange: '', chapterTitle };
 			}
 
-			// Normalize the search text (handle whitespace differences)
-			const normalizedSearch = searchText.replace(/\s+/g, ' ').trim().slice(0, 100);
+			// Prepare search text - take first 80 chars for matching
+			const searchFor = searchText.trim().slice(0, 80);
 			
-			// Use TreeWalker to find text nodes containing the passage
-			const walker = doc.createTreeWalker(
-				doc.body,
-				NodeFilter.SHOW_TEXT,
-				null
-			);
+			// Try to find the text using the browser's native find functionality
+			// This is more reliable than manual text node traversal
+			let range: Range | null = null;
+			
+			// Method 1: Use window.find() if available (works in the iframe context)
+			const contentWindow = content.window;
+			if (contentWindow && typeof contentWindow.find === 'function') {
+				// Clear any existing selection
+				const selection = contentWindow.getSelection();
+				selection?.removeAllRanges();
+				
+				// Try to find the exact text first
+				let found = contentWindow.find(searchFor, false, false, true, false, true, false);
+				
+				// If not found, try with just the first 40 chars
+				if (!found && searchFor.length > 40) {
+					found = contentWindow.find(searchFor.slice(0, 40), false, false, true, false, true, false);
+				}
+				
+				if (found && selection && selection.rangeCount > 0) {
+					range = selection.getRangeAt(0).cloneRange();
+					selection.removeAllRanges();
+					console.log('[EpubService] Found text using window.find()');
+				}
+			}
+			
+			// Method 2: Manual text node search as fallback
+			if (!range) {
+				console.log('[EpubService] Falling back to manual text search');
+				const walker = doc.createTreeWalker(
+					doc.body,
+					NodeFilter.SHOW_TEXT,
+					null
+				);
 
-			let foundNode: Text | null = null;
-			let foundOffset = 0;
-			let accumulatedText = '';
-			const textNodes: Array<{ node: Text; start: number }> = [];
+				// Collect all text with original positions
+				const textNodes: Array<{ node: Text; start: number; text: string }> = [];
+				let accumulatedText = '';
+				let node: Text | null;
+				
+				while ((node = walker.nextNode() as Text | null)) {
+					const nodeText = node.textContent || '';
+					textNodes.push({ node, start: accumulatedText.length, text: nodeText });
+					accumulatedText += nodeText;
+				}
 
-			// Collect all text nodes and their positions
-			let node: Text | null;
-			while ((node = walker.nextNode() as Text | null)) {
-				const nodeText = node.textContent || '';
-				textNodes.push({ node, start: accumulatedText.length });
-				accumulatedText += nodeText;
+				// Search in original text first (case-insensitive)
+				let searchIndex = accumulatedText.toLowerCase().indexOf(searchFor.toLowerCase());
+				
+				// If not found, try normalized search
+				if (searchIndex === -1) {
+					const normalizedAccumulated = accumulatedText.replace(/\s+/g, ' ');
+					const normalizedSearch = searchFor.replace(/\s+/g, ' ');
+					const normalizedIndex = normalizedAccumulated.toLowerCase().indexOf(normalizedSearch.toLowerCase());
+					
+					if (normalizedIndex !== -1) {
+						// Map normalized position back to original position
+						// by counting characters while tracking whitespace
+						let origPos = 0;
+						let normPos = 0;
+						while (normPos < normalizedIndex && origPos < accumulatedText.length) {
+							if (/\s/.test(accumulatedText[origPos])) {
+								// Skip extra whitespace in original
+								origPos++;
+								if (origPos < accumulatedText.length && !/\s/.test(accumulatedText[origPos])) {
+									normPos++; // Count the normalized single space
+								}
+							} else {
+								origPos++;
+								normPos++;
+							}
+						}
+						searchIndex = origPos;
+					}
+				}
+
+				if (searchIndex === -1) {
+					console.log('[EpubService] Text not found in chapter, navigated to chapter start');
+					return { cfiRange: '', chapterTitle };
+				}
+
+				// Find which text node contains the start
+				let foundNode: Text | null = null;
+				let foundOffset = 0;
+				let foundEndNode: Text | null = null;
+				let foundEndOffset = 0;
+				const searchEndIndex = searchIndex + searchFor.length;
+				
+				for (const { node: textNode, start, text } of textNodes) {
+					const nodeEnd = start + text.length;
+					
+					// Find start node
+					if (!foundNode && searchIndex >= start && searchIndex < nodeEnd) {
+						foundNode = textNode;
+						foundOffset = searchIndex - start;
+					}
+					
+					// Find end node
+					if (foundNode && searchEndIndex >= start && searchEndIndex <= nodeEnd) {
+						foundEndNode = textNode;
+						foundEndOffset = searchEndIndex - start;
+						break;
+					} else if (foundNode && searchEndIndex < nodeEnd) {
+						// End is in this node
+						foundEndNode = textNode;
+						foundEndOffset = Math.min(searchEndIndex - start, text.length);
+						break;
+					}
+				}
+
+				if (foundNode) {
+					const newRange = doc.createRange();
+					newRange.setStart(foundNode, Math.min(foundOffset, foundNode.textContent?.length || 0));
+					if (foundEndNode) {
+						newRange.setEnd(foundEndNode, Math.min(foundEndOffset, foundEndNode.textContent?.length || 0));
+					} else {
+						newRange.setEnd(foundNode, Math.min(foundOffset + searchFor.length, foundNode.textContent?.length || 0));
+					}
+					range = newRange;
+				}
 			}
 
-			// Search for the normalized text in accumulated text
-			const normalizedAccumulated = accumulatedText.replace(/\s+/g, ' ');
-			const searchIndex = normalizedAccumulated.toLowerCase().indexOf(normalizedSearch.toLowerCase());
-
-			if (searchIndex === -1) {
-				console.log('[EpubService] Text not found in chapter, navigated to chapter start');
+			if (!range) {
+				console.log('[EpubService] Could not create range for text');
 				return { cfiRange: '', chapterTitle };
 			}
 
-			// Find which text node contains the start of the match
-			let charCount = 0;
-			for (const { node: textNode, start } of textNodes) {
-				const nodeText = (textNode.textContent || '').replace(/\s+/g, ' ');
-				const nodeEnd = charCount + nodeText.length;
-				
-				if (searchIndex >= charCount && searchIndex < nodeEnd) {
-					foundNode = textNode;
-					foundOffset = searchIndex - charCount;
-					break;
+			// Try to create a CFI for this position
+			try {
+				const section = (this.book.spine as any).get(targetHref);
+				if (section) {
+					// Generate CFI from the range
+					const cfi = section.cfiFromRange(range);
+					if (cfi) {
+						console.log(`[EpubService] Found passage, navigating to CFI: ${cfi}`);
+						
+						// Navigate to the CFI location (this scrolls to the passage)
+						await this.rendition.display(cfi);
+						
+						// Add a temporary highlight after navigation
+						setTimeout(() => {
+							try {
+								this.rendition?.annotations.highlight(cfi, {}, undefined, 'citation-highlight');
+								
+								// Remove highlight after 5 seconds
+								setTimeout(() => {
+									try {
+										this.rendition?.annotations.remove(cfi, 'highlight');
+									} catch (e) {
+										// Ignore cleanup errors
+									}
+								}, 5000);
+							} catch (e) {
+								console.warn('[EpubService] Failed to add citation highlight:', e);
+							}
+						}, 100);
+
+						return { cfiRange: cfi, chapterTitle };
+					}
 				}
-				charCount = nodeEnd;
+			} catch (cfiError) {
+				console.warn('[EpubService] Failed to create CFI:', cfiError);
 			}
 
-			if (foundNode) {
-				// Try to create a CFI for this position
-				try {
-					const section = (this.book.spine as any).get(targetHref);
-					if (section) {
-						// Create a range for the found text
-						const range = doc.createRange();
-						const startOffset = Math.min(foundOffset, (foundNode.textContent?.length || 0) - 1);
-						const endOffset = Math.min(startOffset + normalizedSearch.length, foundNode.textContent?.length || 0);
-						
-						range.setStart(foundNode, Math.max(0, startOffset));
-						range.setEnd(foundNode, Math.max(startOffset, endOffset));
-
-						// Generate CFI from the range
-						const cfi = section.cfiFromRange(range);
-						if (cfi) {
-							console.log(`[EpubService] Found passage, navigating to CFI: ${cfi}`);
-							
-							// Navigate to the CFI location (this scrolls to the passage)
-							await this.rendition.display(cfi);
-							
-							// Add a temporary highlight after navigation
-							setTimeout(() => {
-								try {
-									this.rendition?.annotations.highlight(cfi, {}, undefined, 'citation-highlight');
-									
-									// Remove highlight after 5 seconds
-									setTimeout(() => {
-										try {
-											this.rendition?.annotations.remove(cfi, 'highlight');
-										} catch (e) {
-											// Ignore cleanup errors
-										}
-									}, 5000);
-								} catch (e) {
-									console.warn('[EpubService] Failed to add citation highlight:', e);
-								}
-							}, 100);
-
-							return { cfiRange: cfi, chapterTitle };
-						}
-					}
-				} catch (cfiError) {
-					console.warn('[EpubService] Failed to create CFI:', cfiError);
+			// Fallback: scroll the found text into view using the range we created
+			try {
+				const selection = content.window.getSelection();
+				selection?.removeAllRanges();
+				selection?.addRange(range);
+				const startContainer = range.startContainer;
+				const parentEl = startContainer.parentElement;
+				if (parentEl) {
+					parentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
 				}
-
-				// Fallback: scroll the found text into view
-				try {
-					const range = doc.createRange();
-					range.selectNodeContents(foundNode);
-					const selection = content.window.getSelection();
-					selection?.removeAllRanges();
-					selection?.addRange(range);
-					foundNode.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-				} catch (scrollError) {
-					console.warn('[EpubService] Failed to scroll to text:', scrollError);
-				}
+			} catch (scrollError) {
+				console.warn('[EpubService] Failed to scroll to text:', scrollError);
 			}
 
 			return { cfiRange: '', chapterTitle };
