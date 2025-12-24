@@ -733,6 +733,8 @@
 					showHistory={true}
 					initialThreadId={chatInitialThreadId || undefined}
 					{generatePayment}
+					bookId={book?.sha256}
+					debugMode={false}
 					onThreadChange={async (threadId) => {
 						// Update the annotation with the new thread ID (preserve other properties)
 						if (book && threadId && chatCfiRange) {

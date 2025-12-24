@@ -1,10 +1,11 @@
 """FastAPI backend for SvelteReader.
 
-This backend serves as the interface between the Svelte frontend and the
-self-hosted LangGraph agent. It handles:
-- Chat message routing to the LangGraph agent
-- Business logic (payment verification, rate limiting, etc.)
-- Streaming responses back to the frontend
+This backend handles wallet/ecash operations for the pay-per-use model.
+Chat functionality now goes directly between the frontend and LangGraph server.
+
+Responsibilities:
+- Ecash wallet management (receive tokens, check balance)
+- Health checks
 """
 
 import os
@@ -13,14 +14,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.routers import chat, wallet
+from src.routers import wallet
 from src.services.wallet import initialize_wallet
 
 load_dotenv()
 
 app = FastAPI(
     title="SvelteReader API",
-    description="Backend API for SvelteReader AI chat features",
+    description="Backend API for SvelteReader wallet operations",
     version="0.0.1",
 )
 
@@ -44,8 +45,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+# Include routers (wallet only - chat goes directly to LangGraph)
 app.include_router(wallet.router, prefix="/api/wallet", tags=["wallet"])
 
 

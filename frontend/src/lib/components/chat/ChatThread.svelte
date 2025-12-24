@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Message } from '@langchain/langgraph-sdk';
-	import { Bot, X, ChevronLeft, SquarePen, AlertCircle, Trash2 } from '@lucide/svelte';
+	import { Bot, X, ChevronLeft, SquarePen, AlertCircle, Trash2, Search, BookOpen, FileText, Loader2 } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
 	import { useChatStore } from '$lib/stores/chat.svelte';
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
@@ -30,9 +30,11 @@
 		onThreadChange?: (threadId: string | null) => void;
 		onThreadDelete?: (threadId: string) => void;
 		generatePayment?: () => Promise<PaymentInfo | null>;
+		bookId?: string;  // Required for agent tools to access book content
+		debugMode?: boolean;  // Skip real payments in debug mode
 	}
 
-	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment }: Props = $props();
+	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment, bookId, debugMode = false }: Props = $props();
 
 	const chat = useChatStore();
 	const wallet = useWalletStore();
@@ -66,9 +68,16 @@
 
 	// Click outside to close
 	function handleClickOutside(event: MouseEvent) {
-		if (panelElement && !panelElement.contains(event.target as Node)) {
-			onClose?.();
+		const target = event.target as Node;
+		// Ignore if target is no longer in DOM (happens during view transitions)
+		if (!document.body.contains(target)) {
+			return;
 		}
+		// Ignore if click is inside the panel
+		if (panelElement && panelElement.contains(target)) {
+			return;
+		}
+		onClose?.();
 	}
 
 	// Check backend health on mount and set up refund callback
@@ -179,9 +188,16 @@
 
 	async function handleSubmit(content: string) {
 		const previousThreadId = chat.threadId;
+		
+		// In debug mode, use a fake payment generator that returns a dummy token
+		const paymentGenerator = debugMode 
+			? async () => ({ ecash_token: 'cashu_debug_token_not_real', amount_sats: 1 } as PaymentInfo)
+			: generatePayment;
+		
 		await chat.submit(content, {
 			context: passageContext,
-			generatePayment,
+			generatePayment: paymentGenerator,
+			bookId,  // Pass bookId for agent tool execution
 		});
 		// Notify parent if a new thread was created
 		if (chat.threadId && chat.threadId !== previousThreadId) {
@@ -385,7 +401,24 @@
 							{/if}
 						{/each}
 
-						{#if chat.isLoading && !chat.isStreaming}
+						{#if chat.toolStatus.isExecuting}
+							<!-- Tool Execution Status -->
+							<div class="flex justify-start gap-3">
+								<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
+									<Search class="h-4 w-4 animate-pulse text-primary" />
+								</div>
+								<div class="rounded-2xl rounded-bl-md bg-primary/5 border border-primary/20 px-4 py-3">
+									<div class="flex items-center gap-2 text-sm text-primary">
+										<Loader2 class="h-4 w-4 animate-spin" />
+										<span>
+											{#each chat.toolStatus.currentTools as tool, i}
+												{chat.getToolDescription(tool.name)}{i < chat.toolStatus.currentTools.length - 1 ? ', ' : ''}
+											{/each}
+										</span>
+									</div>
+								</div>
+							</div>
+						{:else if chat.isLoading && !chat.isStreaming}
 							<div class="flex justify-start gap-3">
 								<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">
 									<Bot class="h-4 w-4 text-muted-foreground" />

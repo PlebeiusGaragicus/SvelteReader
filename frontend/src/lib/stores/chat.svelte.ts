@@ -4,6 +4,7 @@
  * Provides:
  * - Message state with streaming support
  * - Thread management
+ * - Tool execution status (agent-driven RAG)
  * - Payment integration with CypherTap
  * - Pending payment tracking for refund recovery
  * 
@@ -12,7 +13,16 @@
 
 import type { Message } from '@langchain/langgraph-sdk';
 import { v4 as uuidv4 } from 'uuid';
-import { submitMessage, getThreadMessages, getThreads, deleteThread as deleteThreadApi } from '$lib/services/langgraph';
+import { 
+	submitMessage, 
+	getThreadMessages, 
+	getThreads, 
+	deleteThread as deleteThreadApi,
+	setToolExecutor,
+	type ToolCall,
+	type ToolResult
+} from '$lib/services/langgraph';
+import { executeToolCall } from '$lib/services/agentToolsService';
 import type { PassageContext, PaymentInfo } from '$lib/types/chat';
 
 const MESSAGE_COST_SATS = 1;
@@ -32,6 +42,13 @@ export interface ThreadInfo {
 	title?: string;  // Extracted from first message content
 }
 
+// Tool execution status for UI display
+export interface ToolExecutionStatus {
+	isExecuting: boolean;
+	currentTools: ToolCall[];
+	lastResults: ToolResult[];
+}
+
 interface ChatState {
 	messages: Message[];
 	threadId: string | null;
@@ -41,6 +58,7 @@ interface ChatState {
 	error: string | null;
 	threads: ThreadInfo[];
 	pendingPayment: PendingPayment | null;
+	toolStatus: ToolExecutionStatus;
 }
 
 // Extract title from message content (first ~50 chars of first human message)
@@ -70,6 +88,17 @@ function extractThreadTitle(messages: Message[]): string | undefined {
 	return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
 }
 
+// Map tool names to user-friendly descriptions
+function getToolDescription(toolName: string): string {
+	const descriptions: Record<string, string> = {
+		'get_table_of_contents': 'Reading book structure...',
+		'get_book_metadata': 'Getting book info...',
+		'get_chapter': 'Reading chapter...',
+		'search_book': 'Searching book...',
+	};
+	return descriptions[toolName] || `Running ${toolName}...`;
+}
+
 function createChatStore() {
 	let messages = $state<Message[]>([]);
 	let threadId = $state<string | null>(null);
@@ -81,14 +110,28 @@ function createChatStore() {
 	let streamingContent = $state('');
 	let pendingPayment = $state<PendingPayment | null>(null);
 	
+	// Tool execution status
+	let toolStatus = $state<ToolExecutionStatus>({
+		isExecuting: false,
+		currentTools: [],
+		lastResults: [],
+	});
+	
+	// Current book ID for tool execution
+	let currentBookId = $state<string | null>(null);
+	
 	// Refund callback - set by component that has access to CypherTap
 	let refundCallback: ((token: string) => Promise<boolean>) | null = null;
+
+	// Initialize the tool executor in langgraph service
+	setToolExecutor(executeToolCall);
 
 	async function submit(
 		content: string,
 		options?: {
 			context?: PassageContext;
 			generatePayment?: () => Promise<PaymentInfo | null>;
+			bookId?: string;
 		}
 	): Promise<boolean> {
 		if (!content.trim() || isLoading) return false;
@@ -97,6 +140,12 @@ function createChatStore() {
 		isLoading = true;
 		isStreaming = true;
 		streamingContent = '';
+		toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
+		
+		// Store book ID for tool execution
+		if (options?.bookId) {
+			currentBookId = options.bookId;
+		}
 
 		const messageId = uuidv4();
 
@@ -161,6 +210,7 @@ function createChatStore() {
 					threadId,
 					context: options?.context,
 					payment,
+					bookId: options?.bookId || currentBookId || undefined,
 				},
 				{
 					onToken: (token) => {
@@ -184,6 +234,7 @@ function createChatStore() {
 						// Replace with final state from server
 						messages = finalMessages;
 						isStreaming = false;
+						toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 						
 						if (refund) {
 							// Agent signaled refund needed
@@ -200,6 +251,7 @@ function createChatStore() {
 						// Remove the placeholder AI message on error
 						messages = messages.filter(m => m.id !== aiMessageId);
 						isStreaming = false;
+						toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 						// Attempt refund on error
 						attemptRefund('onError callback');
 					},
@@ -213,6 +265,31 @@ function createChatStore() {
 						// Refresh threads list
 						loadThreads();
 					},
+					// Tool execution callbacks
+					onToolCall: (tools) => {
+						console.log('[Chat] Tool calls received:', tools.map(t => t.name));
+						toolStatus = {
+							isExecuting: true,
+							currentTools: tools,
+							lastResults: [],
+						};
+					},
+					onToolExecuting: (tools) => {
+						console.log('[Chat] Executing tools:', tools.map(t => t.name));
+						toolStatus = {
+							...toolStatus,
+							isExecuting: true,
+							currentTools: tools,
+						};
+					},
+					onToolComplete: (results) => {
+						console.log('[Chat] Tools completed:', results.map(r => ({ id: r.id, hasError: !!r.error })));
+						toolStatus = {
+							isExecuting: false,
+							currentTools: [],
+							lastResults: results,
+						};
+					},
 				}
 			);
 
@@ -225,6 +302,7 @@ function createChatStore() {
 			messages = messages.filter(m => m.id !== aiMessageId);
 			isLoading = false;
 			isStreaming = false;
+			toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 			// Attempt refund on error
 			await attemptRefund('catch block');
 			return false;
@@ -360,6 +438,7 @@ function createChatStore() {
 		threadId = null;
 		error = null;
 		streamingContent = '';
+		toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 	}
 
 	async function deleteThread(id: string): Promise<void> {
@@ -384,6 +463,11 @@ function createChatStore() {
 		// TODO: Implement abort controller for streaming
 		isLoading = false;
 		isStreaming = false;
+		toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
+	}
+	
+	function setBookId(bookId: string): void {
+		currentBookId = bookId;
 	}
 
 	return {
@@ -396,6 +480,8 @@ function createChatStore() {
 		get threads() { return threads; },
 		get streamingContent() { return streamingContent; },
 		get pendingPayment() { return pendingPayment; },
+		get toolStatus() { return toolStatus; },
+		get currentBookId() { return currentBookId; },
 		
 		submit,
 		loadThread,
@@ -407,6 +493,8 @@ function createChatStore() {
 		setRefundCallback,
 		recoverPendingPayment,
 		extractThreadTitle,
+		setBookId,
+		getToolDescription,
 		
 		setThreadId: (id: string | null) => { threadId = id; },
 	};

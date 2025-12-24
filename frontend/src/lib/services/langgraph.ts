@@ -2,7 +2,13 @@
  * LangGraph Service - SDK wrapper for Svelte
  * 
  * Provides a clean interface to the LangGraph SDK for use in Svelte components.
- * Handles streaming, thread management, and payment token injection.
+ * Handles streaming, thread management, payment token injection, and tool interrupts.
+ * 
+ * Architecture: Agent-Driven RAG with Client-Side Tool Execution
+ * - Agent decides when to search/retrieve from the book
+ * - Graph interrupts before tool execution
+ * - Client executes tools locally (EPUB access, vector search)
+ * - Client resumes graph with tool results
  */
 
 import { Client } from '@langchain/langgraph-sdk';
@@ -21,13 +27,33 @@ export function getClient(apiUrl?: string): Client {
 	return clientInstance;
 }
 
+// =============================================================================
+// TYPES
+// =============================================================================
+
+export interface ToolCall {
+	id: string;
+	name: string;
+	args: Record<string, unknown>;
+}
+
+export interface ToolResult {
+	id: string;
+	result: unknown;
+	error?: string;
+}
+
 export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
 	onComplete?: (messages: Message[], refund?: boolean) => void;
 	onError?: (error: Error) => void;
 	onThreadId?: (threadId: string) => void;
-	onRefund?: () => void;  // Called when agent signals refund is needed
+	onRefund?: () => void;
+	// New callbacks for tool handling
+	onToolCall?: (toolCalls: ToolCall[]) => void;
+	onToolExecuting?: (toolCalls: ToolCall[]) => void;
+	onToolComplete?: (results: ToolResult[]) => void;
 }
 
 export interface SubmitOptions {
@@ -35,11 +61,42 @@ export interface SubmitOptions {
 	assistantId?: string;
 	context?: PassageContext;
 	payment?: PaymentInfo;
+	bookId?: string;  // Required for tool execution
 	streamMode?: ('values' | 'messages' | 'updates')[];
+	maxToolIterations?: number;  // Prevent infinite loops (default: 10)
 }
 
+// Tool executor function type - injected by the caller
+export type ToolExecutor = (toolCall: ToolCall, bookId: string) => Promise<ToolResult>;
+
+// Default no-op executor (for when tools aren't needed)
+const defaultToolExecutor: ToolExecutor = async (toolCall) => ({
+	id: toolCall.id,
+	result: null,
+	error: `Tool executor not configured for: ${toolCall.name}`
+});
+
+// Global tool executor - set by the chat component
+let globalToolExecutor: ToolExecutor = defaultToolExecutor;
+
+export function setToolExecutor(executor: ToolExecutor): void {
+	globalToolExecutor = executor;
+}
+
+// =============================================================================
+// MAIN SUBMIT FUNCTION WITH INTERRUPT HANDLING
+// =============================================================================
+
 /**
- * Submit a message to the LangGraph agent with streaming support.
+ * Submit a message to the LangGraph agent with streaming and interrupt support.
+ * 
+ * Flow:
+ * 1. Send message to agent
+ * 2. Stream response tokens
+ * 3. If agent calls tools -> interrupt
+ * 4. Execute tools locally via toolExecutor
+ * 5. Resume agent with tool results
+ * 6. Repeat until no more tool calls
  */
 export async function submitMessage(
 	content: string,
@@ -48,6 +105,7 @@ export async function submitMessage(
 ): Promise<{ threadId: string; messages: Message[] }> {
 	const client = getClient();
 	const assistantId = options.assistantId || import.meta.env.VITE_LANGGRAPH_ASSISTANT_ID || 'agent';
+	const maxIterations = options.maxToolIterations ?? 10;
 	
 	let threadId = options.threadId;
 	
@@ -70,7 +128,6 @@ export async function submitMessage(
 	};
 	
 	if (options.context) {
-		// Agent expects passage_context with snake_case keys
 		input.passage_context = {
 			text: options.context.text,
 			note: options.context.note,
@@ -83,78 +140,202 @@ export async function submitMessage(
 		input.payment = options.payment;
 	}
 	
+	if (options.bookId) {
+		input.book_id = options.bookId;
+	}
+	
 	const messages: Message[] = [];
 	let currentContent = '';
 	let shouldRefund = false;
+	let iteration = 0;
+	
+	// Input for the current iteration (null means resume from interrupt)
+	let currentInput: Record<string, unknown> | null = input;
 	
 	try {
-		// Stream the response
-		const stream = client.runs.stream(threadId, assistantId, {
-			input,
-			streamMode: options.streamMode || ['values'],
-		});
-		
-		for await (const event of stream) {
-			console.log('[LangGraph] Stream event:', event.event, 'data keys:', Object.keys(event.data || {}));
+		// Loop to handle multiple tool call iterations
+		while (iteration < maxIterations) {
+			iteration++;
+			console.log(`[LangGraph] ================================================`);
+			console.log(`[LangGraph] Iteration ${iteration}/${maxIterations}`);
+			console.log(`[LangGraph] Thread ID: ${threadId}`);
+			console.log(`[LangGraph] ================================================`);
 			
-			if (event.event === 'values') {
-				const data = event.data as { messages?: Message[]; refund?: boolean };
-				
-				// Debug: log the refund value
-				console.log('[LangGraph] Values event - refund:', data.refund, 'type:', typeof data.refund);
-				
-				// Check for refund flag from agent
-				if (data.refund === true) {
-					console.log('[LangGraph] Agent signaled refund needed');
-					shouldRefund = true;
+			let interrupted = false;
+			let pendingToolCalls: ToolCall[] = [];
+			
+			console.log(`[LangGraph] Starting stream with input:`, currentInput === null ? 'null (resume)' : 'new message');
+			
+			// Stream the response
+			const stream = client.runs.stream(threadId, assistantId, {
+				input: currentInput,
+				streamMode: options.streamMode || ['values'],
+			});
+			
+			for await (const event of stream) {
+				console.log('[LangGraph] Stream event:', event.event);
+				if (event.data) {
+					console.log('[LangGraph] Event data:', JSON.stringify(event.data, (key, value) => {
+						// Truncate long content for readability
+						if (key === 'content' && typeof value === 'string' && value.length > 200) {
+							return value.slice(0, 200) + '...[truncated]';
+						}
+						return value;
+					}, 2));
 				}
 				
-				if (data.messages) {
-					messages.length = 0;
-					messages.push(...data.messages);
+				if (event.event === 'values') {
+					const data = event.data as { 
+						messages?: Message[]; 
+						refund?: boolean;
+					};
 					
-					// Get the latest AI message for streaming
-					const lastMessage = messages[messages.length - 1];
-					if (lastMessage?.type === 'ai') {
-						const newContent = typeof lastMessage.content === 'string' 
-							? lastMessage.content 
-							: '';
+					// Check for refund flag from agent
+					if (data.refund === true) {
+						console.log('[LangGraph] Agent signaled refund needed');
+						shouldRefund = true;
+					}
+					
+					if (data.messages) {
+						messages.length = 0;
+						messages.push(...data.messages);
 						
-						// Emit new tokens
-						if (newContent.length > currentContent.length) {
-							const newTokens = newContent.slice(currentContent.length);
-							callbacks.onToken?.(newTokens);
-							currentContent = newContent;
+						// Get the latest message
+						const lastMessage = messages[messages.length - 1];
+						
+						// Check for tool calls (indicates interrupt)
+						if (lastMessage?.type === 'ai' && (lastMessage as any).tool_calls?.length > 0) {
+							pendingToolCalls = (lastMessage as any).tool_calls.map((tc: any) => ({
+								id: tc.id,
+								name: tc.name,
+								args: tc.args || {},
+							}));
+							interrupted = true;
+							console.log('[LangGraph] Tool calls detected:', pendingToolCalls.map(tc => tc.name));
+							callbacks.onToolCall?.(pendingToolCalls);
 						}
 						
-						callbacks.onMessage?.(lastMessage);
+						// Stream tokens for AI messages without tool calls
+						if (lastMessage?.type === 'ai' && !(lastMessage as any).tool_calls?.length) {
+							const newContent = typeof lastMessage.content === 'string' 
+								? lastMessage.content 
+								: '';
+							
+							if (newContent.length > currentContent.length) {
+								const newTokens = newContent.slice(currentContent.length);
+								callbacks.onToken?.(newTokens);
+								currentContent = newContent;
+							}
+							
+							callbacks.onMessage?.(lastMessage);
+						}
 					}
 				}
 			}
+			
+			console.log(`[LangGraph] Stream ended. Interrupted: ${interrupted}, Pending tools: ${pendingToolCalls.length}`);
+			console.log(`[LangGraph] Current messages count: ${messages.length}`);
+			if (messages.length > 0) {
+				const lastMsg = messages[messages.length - 1];
+				console.log(`[LangGraph] Last message type: ${lastMsg.type}`);
+				if ((lastMsg as any).tool_calls) {
+					console.log(`[LangGraph] Last message tool_calls: ${JSON.stringify((lastMsg as any).tool_calls.map((tc: any) => tc.name))}`);
+				}
+			}
+			
+			// If no interrupt, we're done
+			if (!interrupted) {
+				console.log('[LangGraph] No more tool calls, completing');
+				break;
+			}
+			
+			// Execute tools locally
+			if (!options.bookId) {
+				console.error('[LangGraph] Tool calls require bookId but none provided');
+				break;
+			}
+			
+			callbacks.onToolExecuting?.(pendingToolCalls);
+			console.log('[LangGraph] Executing tools locally...');
+			
+			const toolResults = await Promise.all(
+				pendingToolCalls.map(tc => globalToolExecutor(tc, options.bookId!))
+			);
+			
+			callbacks.onToolComplete?.(toolResults);
+			console.log('[LangGraph] Tool results:', toolResults.map(r => ({
+				id: r.id,
+				hasResult: r.result !== null,
+				error: r.error
+			})));
+			
+			// Build tool messages to send back
+			const toolMessages = toolResults.map(r => ({
+				type: 'tool' as const,
+				tool_call_id: r.id,
+				name: pendingToolCalls.find(tc => tc.id === r.id)?.name || 'unknown',
+				content: r.error 
+					? JSON.stringify({ error: r.error })
+					: (typeof r.result === 'string' ? r.result : JSON.stringify(r.result)),
+			}));
+			
+			console.log('[LangGraph] Tool messages to send:', JSON.stringify(toolMessages, null, 2));
+			
+			// Update thread state with tool results
+			// Use asNode to specify these are tool outputs
+			try {
+				console.log('[LangGraph] Updating thread state with tool results...');
+				console.log('[LangGraph] asNode: "tools"');
+				const updateResult = await client.threads.updateState(threadId, {
+					values: {
+						messages: toolMessages,
+					},
+					asNode: 'tools',  // Specify we're providing output from the tools node
+				});
+				console.log('[LangGraph] Thread state updated successfully');
+				console.log('[LangGraph] Update result:', JSON.stringify(updateResult, null, 2));
+			} catch (updateError) {
+				console.error('[LangGraph] Failed to update thread state:', updateError);
+				console.error('[LangGraph] Error details:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2));
+				throw updateError;
+			}
+			
+			// Resume with null input (continue from where we left off)
+			currentInput = null;
+			console.log('[LangGraph] ================================================');
+			console.log('[LangGraph] Resuming graph execution with null input...');
+			console.log('[LangGraph] ================================================');
+		}
+		
+		if (iteration >= maxIterations) {
+			console.warn(`[LangGraph] Reached max tool iterations (${maxIterations})`);
 		}
 		
 		// Signal refund if needed
-		console.log('[LangGraph] Stream complete - shouldRefund:', shouldRefund);
 		if (shouldRefund) {
 			callbacks.onRefund?.();
 		}
 		
 		callbacks.onComplete?.(messages, shouldRefund);
 		
-		return { threadId, messages, refund: shouldRefund };
+		return { threadId, messages };
+		
 	} catch (error) {
 		callbacks.onError?.(error as Error);
 		throw error;
 	}
 }
 
+// =============================================================================
+// THREAD MANAGEMENT
+// =============================================================================
+
 /**
  * Get all threads for the current user.
  */
 export async function getThreads(): Promise<Thread[]> {
 	const client = getClient();
-	// SDK uses search() not list()
-	const threads = await client.threads.search(); // TODO: add filtering
+	const threads = await client.threads.search();
 	return threads;
 }
 
@@ -197,7 +378,6 @@ export async function createThread(metadata?: Record<string, unknown>): Promise<
 export async function checkHealth(): Promise<boolean> {
 	try {
 		const url = import.meta.env.VITE_LANGGRAPH_API_URL || 'http://localhost:2024';
-		// Use a simple fetch to /ok endpoint which is the standard LangGraph health check
 		const response = await fetch(`${url}/ok`, {
 			method: 'GET',
 			headers: { 'Accept': 'application/json' },

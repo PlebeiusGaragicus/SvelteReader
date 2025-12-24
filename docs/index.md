@@ -25,6 +25,7 @@ SvelteReader is a proof-of-concept web application that demonstrates:
 
 | Document | Description |
 |----------|-------------|
+| [Agent RAG Architecture](agent-rag-architecture.md) | Agent-driven book retrieval with client-side tools |
 | [AI Chat Integration](ai-chat-integration.md) | LangGraph agent setup and API |
 | [Ecash Payment Flow](ecash-payment-flow.md) | Validate-then-redeem payment design |
 | [Annotation Sync](annotation-sync-design.md) | Nostr-based annotation sync protocol |

@@ -4,15 +4,21 @@ This agent helps users discuss and analyze passages from their ebooks.
 It receives context about highlighted text and user notes, then provides
 intelligent responses about the content.
 
+Architecture: Agent-Driven RAG with Client-Side Tool Execution
+1. Agent decides when to search/retrieve from the book
+2. Tools are defined as stubs - execution happens on the client
+3. Graph uses interrupt_before=["tools"] to pause before tool execution
+4. Client executes tools locally (EPUB access, vector search)
+5. Client resumes graph with tool results
+
 Payment flow (validate-then-redeem-on-success):
 1. Client sends ecash token with message
 2. validate_payment node checks token is UNSPENT (doesn't redeem)
-3. chat_node processes the LLM request
-4. On SUCCESS: redeem token to nutstash wallet
+3. agent node processes the LLM request (may call tools)
+4. On SUCCESS: redeem token to wallet
 5. On FAILURE: don't redeem, return refund flag so client can self-recover
 
-This ensures zero fund loss - if anything fails, the client keeps their token.
-See docs/ecash-payment-flow.md for full design documentation.
+See docs/ecash-payment-flow.md for full payment design.
 """
 
 from __future__ import annotations
@@ -23,15 +29,81 @@ import json
 import base64
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 
+
+# =============================================================================
+# TOOL DEFINITIONS (Client-Executed)
+# These tools are stubs - the actual execution happens on the client.
+# The graph interrupts before the tools node, client executes, then resumes.
+# =============================================================================
+
+@tool
+def get_table_of_contents() -> str:
+    """Get the table of contents for the current book.
+    
+    Returns a structured list of chapters with their IDs, titles, and hierarchy.
+    Use this to understand the book structure before retrieving specific chapters.
+    """
+    # Never actually called - graph interrupts before execution
+    return ""
+
+
+@tool
+def get_book_metadata() -> str:
+    """Get metadata about the current book.
+    
+    Returns title, author, publication info, and total page count.
+    Use this to provide context about the book being discussed.
+    """
+    return ""
+
+
+@tool
+def get_chapter(chapter_id: str) -> str:
+    """Get the full text content of a specific chapter.
+    
+    Args:
+        chapter_id: The chapter identifier from the table of contents.
+                   Use get_table_of_contents() first to find valid chapter IDs.
+    
+    Returns the complete chapter text. Use for detailed analysis, 
+    summarization, or when you need full chapter context.
+    Note: Very long chapters may be truncated.
+    """
+    return ""
+
+
+@tool
+def search_book(query: str, top_k: int = 5) -> str:
+    """Semantic search across the entire book.
+    
+    Args:
+        query: Natural language search query describing what you're looking for.
+               Be specific to get better results.
+        top_k: Number of results to return (default 5, max 20).
+    
+    Returns passages ranked by relevance with chapter titles and approximate locations.
+    Use this to find specific topics, quotes, or themes mentioned anywhere in the book.
+    """
+    return ""
+
+
+# All tools that require client-side execution
+CLIENT_TOOLS = [get_table_of_contents, get_book_metadata, get_chapter, search_book]
+
+
+# =============================================================================
+# STATE DEFINITIONS
+# =============================================================================
 
 class PaymentInfo(TypedDict, total=False):
     """Payment information from client."""
-
     ecash_token: str  # Cashu ecash token
     amount_sats: int  # Expected amount in sats
     mint: str | None  # Mint URL
@@ -39,7 +111,6 @@ class PaymentInfo(TypedDict, total=False):
 
 class PassageContext(TypedDict, total=False):
     """Context about the passage being discussed."""
-
     text: str  # The highlighted text from the book
     note: str | None  # User's note about the passage
     book_title: str | None  # Title of the book
@@ -48,34 +119,44 @@ class PassageContext(TypedDict, total=False):
 
 class AgentState(TypedDict):
     """State for the reader assistant agent."""
-
     messages: Annotated[list[BaseMessage], add_messages]
     passage_context: PassageContext | None
+    book_id: str | None  # Current book ID for tool execution
     payment: PaymentInfo | None
     payment_validated: bool  # Token checked but not redeemed
     payment_token: str | None  # Token to redeem on success
     refund: bool  # Signal client to self-redeem on error
 
 
+# =============================================================================
+# SYSTEM PROMPT
+# =============================================================================
+
 def get_system_prompt(context: PassageContext | None) -> str:
     """Generate a system prompt based on the passage context."""
-    base_prompt = """You are a helpful reading assistant that helps users understand and discuss passages from books they are reading.
+    base_prompt = """You are a reading assistant with access to the user's ebook.
 
-Your role is to:
-- Help explain complex passages or concepts
-- Provide historical or cultural context when relevant
-- Answer questions about themes, characters, or literary devices
-- Engage in thoughtful discussion about the text
-- Help users make connections to other works or ideas
+You have tools to explore the book:
+- get_table_of_contents(): See the book structure and chapter IDs
+- get_chapter(chapter_id): Read a full chapter's content
+- search_book(query): Find relevant passages by semantic search
+- get_book_metadata(): Get book title, author, and page count
 
-Be concise but thorough. If you don't know something, say so rather than making things up."""
+IMPORTANT GUIDELINES:
+1. Use these tools to answer questions accurately - don't guess or make up content
+2. For summarization tasks, first get the table of contents, then retrieve specific chapters
+3. For topic questions, search the book first to find relevant passages
+4. Always cite your sources with chapter names when possible
+5. If a chapter is very long, you may receive truncated content - mention this if relevant
+
+Be concise but thorough. If you can't find information in the book, say so clearly."""
 
     if context:
         context_parts = []
         if context.get("book_title"):
             context_parts.append(f"Book: {context['book_title']}")
         if context.get("chapter"):
-            context_parts.append(f"Chapter: {context['chapter']}")
+            context_parts.append(f"Current Chapter: {context['chapter']}")
         if context.get("text"):
             context_parts.append(f'\nHighlighted passage:\n"{context["text"]}"')
         if context.get("note"):
@@ -86,6 +167,10 @@ Be concise but thorough. If you don't know something, say so rather than making 
 
     return base_prompt
 
+
+# =============================================================================
+# MODEL CREATION
+# =============================================================================
 
 def create_model():
     """Create the LLM model using OpenAI-compatible endpoint.
@@ -118,6 +203,10 @@ def create_model():
     )
 
 
+# =============================================================================
+# PAYMENT VALIDATION
+# =============================================================================
+
 def validate_token_format(token: str) -> bool:
     """Validate that a string looks like a valid Cashu token.
     
@@ -129,22 +218,17 @@ def validate_token_format(token: str) -> bool:
     Actual validation happens when nutstash tries to redeem it.
     """
     try:
-        # Check prefix
         if not (token.startswith("cashuA") or token.startswith("cashuB")):
             print(f"[Payment] Unknown token format: {token[:10]}...")
             return False
         
         token_data = token[6:]
-        
-        # Check it's valid base64url by trying to decode
-        # Add padding if needed
         padding = 4 - len(token_data) % 4
         if padding != 4:
             token_data += "=" * padding
         
         decoded = base64.urlsafe_b64decode(token_data)
         
-        # Just check we got some data
         if len(decoded) < 10:
             print("[Payment] Token data too short")
             return False
@@ -159,18 +243,9 @@ def validate_token_format(token: str) -> bool:
 
 
 async def validate_token_state(token: str) -> tuple[bool, str | None]:
-    """Validate that a Cashu token has valid format.
-    
-    We do basic format validation here. The actual spend check
-    happens when nutstash tries to redeem the token.
-    
-    Returns (is_valid, mint_url or None).
-    """
+    """Validate that a Cashu token has valid format."""
     if not validate_token_format(token):
         return False, None
-    
-    # We can't easily extract the mint URL from cashuB tokens without CBOR parsing
-    # Just return True with no mint URL - nutstash will handle the actual redemption
     print("[Payment] Token format validated, will attempt redemption on success")
     return True, None
 
@@ -205,12 +280,12 @@ async def redeem_token_to_wallet(token: str) -> bool:
         return False
 
 
+# =============================================================================
+# GRAPH NODES
+# =============================================================================
+
 async def validate_payment_node(state: AgentState) -> dict:
-    """Validate the ecash token WITHOUT redeeming it.
-    
-    This node checks that the token is valid and unspent.
-    The token is stored in state for later redemption on success.
-    """
+    """Validate the ecash token WITHOUT redeeming it."""
     payment = state.get("payment")
     
     # If no payment provided, skip validation (free mode for development)
@@ -224,25 +299,30 @@ async def validate_payment_node(state: AgentState) -> dict:
     
     token = payment["ecash_token"]
     
-    # DEV: Log full token for manual recovery if funds are lost
+    # Debug mode: accept fake tokens for testing without losing funds
+    if token.startswith("cashu_debug_") or token == "debug":
+        print("[Payment] DEBUG MODE - accepting fake token for testing")
+        return {
+            "payment_validated": True,
+            "payment_token": None,  # Don't try to redeem debug tokens
+            "refund": False,
+        }
+    
     print(f"[Payment] ========== RECEIVED TOKEN (for recovery) ==========")
     print(f"[Payment] {token}")
     print(f"[Payment] ====================================================")
     
-    # Validate token format and check state
     is_valid, mint_url = await validate_token_state(token)
     
     if not is_valid:
         print("[Payment] Token validation failed - client should still have valid token")
-        print(f"[Payment] RECOVERY TOKEN: {token}")
         return {
             "payment_validated": False,
             "payment_token": None,
-            "refund": True,  # Signal refund - token format was bad but might still be valid
+            "refund": True,
         }
     
-    # Token is valid - store it for redemption after successful LLM processing
-    print(f"[Payment] Token validated from mint: {mint_url}, will redeem on success")
+    print(f"[Payment] Token validated, will redeem on success")
     return {
         "payment_validated": True,
         "payment_token": token,
@@ -250,98 +330,130 @@ async def validate_payment_node(state: AgentState) -> dict:
     }
 
 
-async def chat_node(state: AgentState) -> dict:
-    """Process the user's message and generate a response.
+async def agent_node(state: AgentState) -> dict:
+    """Process the user's message with the LLM.
     
-    On success: redeems the payment token
-    On failure: sets refund flag so client can self-recover
+    The model has access to tools for book retrieval.
+    Tool calls will cause an interrupt - client executes them.
     """
-    # Check if payment was validated
     if not state.get("payment_validated", True):
         return {
             "messages": [AIMessage(content="Payment validation failed. Please try again with a valid ecash token.")],
-            "refund": True,  # Changed to True - client should try to recover
+            "refund": True,
         }
-    
-    token = state.get("payment_token")
     
     try:
         model = create_model()
-
+        
+        # Bind tools to the model
+        model_with_tools = model.bind_tools(CLIENT_TOOLS)
+        
         # Build messages with system prompt
         system_prompt = get_system_prompt(state.get("passage_context"))
         messages = [SystemMessage(content=system_prompt)] + state["messages"]
-
-        # Generate response
-        print("[Payment] Invoking LLM...")
-        response = await model.ainvoke(messages)
-        print("[Payment] LLM response received successfully")
         
-        # SUCCESS - Now redeem the token
-        if token:
-            print("[Payment] Attempting to redeem token to wallet...")
-            redeemed = await redeem_token_to_wallet(token)
-            if not redeemed:
-                # Redemption failed but LLM succeeded
-                # Log full token for manual recovery
-                print("[Payment] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                print("[Payment] WARNING: LLM succeeded but token redemption failed!")
-                print("[Payment] UNREDEEMED TOKEN - MANUAL RECOVERY NEEDED:")
-                print(f"[Payment] {token}")
-                print("[Payment] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-            else:
-                print("[Payment] Token redeemed successfully")
+        print("[Agent] Invoking LLM...")
+        response = await model_with_tools.ainvoke(messages)
+        print(f"[Agent] LLM response received. Has tool calls: {bool(response.tool_calls)}")
         
-        return {
-            "messages": [response],
-            "refund": False,
-        }
+        return {"messages": [response]}
         
     except Exception as e:
-        # FAILURE - Don't redeem, signal client to self-recover
-        print(f"[Payment] LLM processing failed: {e}")
+        print(f"[Agent] LLM processing failed: {e}")
+        token = state.get("payment_token")
         if token:
             print("[Payment] ========== REFUNDABLE TOKEN ==========")
             print(f"[Payment] {token}")
-            print("[Payment] Client should self-redeem this token")
             print("[Payment] ========================================")
         return {
             "messages": [AIMessage(content=f"Sorry, I encountered an error processing your request. Your payment has not been taken - please try again.")],
-            "refund": True,  # Signal client to self-redeem their token
+            "refund": True,
         }
 
 
-def should_continue(state: AgentState) -> Literal["end"]:
-    """Determine if the conversation should continue or end."""
-    return "end"
+async def finalize_node(state: AgentState) -> dict:
+    """Finalize the conversation and redeem payment if successful."""
+    token = state.get("payment_token")
+    
+    if token:
+        print("[Payment] Attempting to redeem token to wallet...")
+        redeemed = await redeem_token_to_wallet(token)
+        if not redeemed:
+            print("[Payment] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            print("[Payment] WARNING: Conversation succeeded but token redemption failed!")
+            print("[Payment] UNREDEEMED TOKEN - MANUAL RECOVERY NEEDED:")
+            print(f"[Payment] {token}")
+            print("[Payment] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        else:
+            print("[Payment] Token redeemed successfully")
+    
+    return {"refund": False}
 
 
-def route_after_validation(state: AgentState) -> Literal["chat", "end"]:
+# =============================================================================
+# GRAPH ROUTING
+# =============================================================================
+
+def route_after_validation(state: AgentState) -> Literal["agent", "end"]:
     """Route based on payment validation result."""
     if state.get("payment_validated", True):
-        return "chat"
+        return "agent"
     return "end"
 
+
+def should_continue(state: AgentState) -> Literal["tools", "finalize"]:
+    """Determine if the agent wants to call tools or is done."""
+    messages = state.get("messages", [])
+    if not messages:
+        return "finalize"
+    
+    last_message = messages[-1]
+    
+    # Check if the last message has tool calls
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        print(f"[Agent] Tool calls detected: {[tc['name'] for tc in last_message.tool_calls]}")
+        return "tools"
+    
+    return "finalize"
+
+
+def route_after_tools(state: AgentState) -> Literal["agent"]:
+    """After tools execute, always go back to agent for next step."""
+    return "agent"
+
+
+# =============================================================================
+# GRAPH CONSTRUCTION
+# =============================================================================
+
+# Create tool node for client-executed tools
+tool_node = ToolNode(CLIENT_TOOLS)
 
 # Build the graph
 builder = StateGraph(AgentState)
 
 # Add nodes
 builder.add_node("validate_payment", validate_payment_node)
-builder.add_node("chat", chat_node)
+builder.add_node("agent", agent_node)
+builder.add_node("tools", tool_node)
+builder.add_node("finalize", finalize_node)
 
 # Add edges
 builder.add_edge("__start__", "validate_payment")
 builder.add_conditional_edges(
     "validate_payment",
     route_after_validation,
-    {"chat": "chat", "end": END},
+    {"agent": "agent", "end": END},
 )
 builder.add_conditional_edges(
-    "chat",
+    "agent",
     should_continue,
-    {"end": END},
+    {"tools": "tools", "finalize": "finalize"},
 )
+builder.add_edge("tools", "agent")
+builder.add_edge("finalize", END)
 
-# Compile the graph
-graph = builder.compile()
+# Compile the graph WITH interrupt_before tools
+# This causes the graph to pause before executing tools,
+# allowing the client to execute them locally and resume
+graph = builder.compile(interrupt_before=["tools"])

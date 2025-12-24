@@ -48,6 +48,7 @@ nav:
     - Design Decisions: design-decisions.md
     - Refactoring Guide: refactoring.md
   - Technical Guides:
+    - Agent RAG Architecture: agent-rag-architecture.md
     - AI Chat Integration: ai-chat-integration.md
     - Ecash Payment Flow: ecash-payment-flow.md
     - Annotation Sync: annotation-sync-design.md

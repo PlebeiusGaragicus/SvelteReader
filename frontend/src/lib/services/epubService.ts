@@ -851,6 +851,180 @@ class EpubService {
 		}, 300);
 	}
 
+	// =============================================================================
+	// TEXT EXTRACTION FOR RAG (Agent-Driven Retrieval)
+	// =============================================================================
+
+	/**
+	 * Get the full text content of a chapter by its ID/href.
+	 * Used by the AI agent's get_chapter tool.
+	 */
+	async getChapterText(chapterId: string): Promise<string> {
+		if (!this.book) throw new Error('No book loaded');
+		
+		const spine = this.book.spine as any;
+		const items = spine?.items || [];
+		
+		// Find the spine item matching this chapter
+		const item = items.find((i: any) => 
+			i.href?.includes(chapterId) || 
+			i.idref === chapterId ||
+			i.id === chapterId
+		);
+		
+		if (!item) {
+			// Try a more lenient search
+			const lowerChapterId = chapterId.toLowerCase();
+			const fuzzyMatch = items.find((i: any) => 
+				i.href?.toLowerCase().includes(lowerChapterId) ||
+				i.idref?.toLowerCase().includes(lowerChapterId)
+			);
+			if (!fuzzyMatch) {
+				throw new Error(`Chapter not found: ${chapterId}`);
+			}
+			return this.extractTextFromSpineItem(fuzzyMatch);
+		}
+		
+		return this.extractTextFromSpineItem(item);
+	}
+
+	/**
+	 * Extract text content from a spine item.
+	 */
+	private async extractTextFromSpineItem(item: any): Promise<string> {
+		if (!this.book) throw new Error('No book loaded');
+		
+		try {
+			const doc = await item.load(this.book.load.bind(this.book));
+			const text = doc.body?.textContent || '';
+			item.unload();
+			return text.trim();
+		} catch (e) {
+			console.error('Failed to extract text from spine item:', e);
+			throw new Error(`Failed to load chapter content`);
+		}
+	}
+
+	/**
+	 * Get all text content from the book for indexing.
+	 * Used to build the client-side vector store.
+	 */
+	async getAllChaptersText(): Promise<Array<{
+		id: string;
+		title: string;
+		text: string;
+		href: string;
+	}>> {
+		if (!this.book) throw new Error('No book loaded');
+		
+		const chapters: Array<{ id: string; title: string; text: string; href: string }> = [];
+		const toc = await this.getTableOfContents();
+		const spine = this.book.spine as any;
+		const items = spine?.items || [];
+		
+		for (const item of items) {
+			try {
+				const doc = await item.load(this.book.load.bind(this.book));
+				const text = doc.body?.textContent || '';
+				
+				// Find TOC entry for title
+				const tocEntry = this.findTocEntryForHref(toc, item.href);
+				
+				chapters.push({
+					id: item.idref || item.id || item.href,
+					title: tocEntry?.label || this.extractTitleFromHref(item.href),
+					text: text.trim(),
+					href: item.href,
+				});
+				
+				item.unload();
+			} catch (e) {
+				console.warn(`Failed to extract chapter ${item.href}:`, e);
+			}
+		}
+		
+		return chapters;
+	}
+
+	/**
+	 * Get book metadata for the AI agent.
+	 */
+	getMetadata(): { title: string; author: string; totalPages: number } | null {
+		if (!this.book) return null;
+		
+		const metadata = (this.book as any).packaging?.metadata;
+		const spine = this.book.spine as any;
+		
+		return {
+			title: metadata?.title || 'Unknown Title',
+			author: metadata?.creator || 'Unknown Author',
+			totalPages: this.totalLocations || spine?.items?.length * 20 || 100,
+		};
+	}
+
+	/**
+	 * Get table of contents formatted for the AI agent.
+	 */
+	async getTableOfContentsForAgent(): Promise<Array<{
+		id: string;
+		title: string;
+		href: string;
+		level: number;
+	}>> {
+		const toc = await this.getTableOfContents();
+		return this.flattenTocForAgent(toc, 0);
+	}
+
+	private flattenTocForAgent(items: TocItem[], level: number): Array<{
+		id: string;
+		title: string;
+		href: string;
+		level: number;
+	}> {
+		const result: Array<{ id: string; title: string; href: string; level: number }> = [];
+		
+		for (const item of items) {
+			result.push({
+				id: item.id || item.href,
+				title: item.label,
+				href: item.href,
+				level,
+			});
+			
+			if (item.subitems) {
+				result.push(...this.flattenTocForAgent(item.subitems, level + 1));
+			}
+		}
+		
+		return result;
+	}
+
+	private findTocEntryForHref(toc: TocItem[], href: string): TocItem | null {
+		const baseHref = href.split('#')[0];
+		
+		for (const item of toc) {
+			const itemBaseHref = item.href.split('#')[0];
+			if (itemBaseHref === baseHref || item.href.includes(baseHref)) {
+				return item;
+			}
+			if (item.subitems) {
+				const found = this.findTocEntryForHref(item.subitems, href);
+				if (found) return found;
+			}
+		}
+		
+		return null;
+	}
+
+	private extractTitleFromHref(href: string): string {
+		// Extract a readable name from the href
+		const filename = href.split('/').pop() || href;
+		return filename
+			.replace(/\.(x?html?|xml)$/i, '')
+			.replace(/[-_]/g, ' ')
+			.replace(/^\d+\s*/, ''); // Remove leading numbers
+	}
+
 	destroy(): void {
 		if (this.resizeTimeout) {
 			clearTimeout(this.resizeTimeout);
