@@ -34,9 +34,10 @@
 		generatePayment?: () => Promise<PaymentInfo | null>;
 		bookId?: string;  // Required for agent tools to access book content
 		debugMode?: boolean;  // Skip real payments in debug mode
+		disableClickOutside?: boolean;  // Disable click-outside handler (e.g., during resize)
 	}
 
-	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment, bookId, debugMode = false }: Props = $props();
+	let { onClose, passageContext, showHistory = true, initialThreadId, onThreadChange, onThreadDelete, generatePayment, bookId, debugMode = false, disableClickOutside = false }: Props = $props();
 
 	const chat = useChatStore();
 	const wallet = useWalletStore();
@@ -70,6 +71,11 @@
 
 	// Click outside to close
 	function handleClickOutside(event: MouseEvent) {
+		// Ignore if click-outside is disabled (e.g., during resize)
+		if (disableClickOutside) {
+			return;
+		}
+		
 		const target = event.target as Node;
 		// Ignore if target is no longer in DOM (happens during view transitions)
 		if (!document.body.contains(target)) {

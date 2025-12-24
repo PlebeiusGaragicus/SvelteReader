@@ -195,14 +195,10 @@ function createChatStore() {
 		};
 		messages = [...messages, humanMessage];
 
-		// Add placeholder for streaming AI response
-		const aiMessageId = uuidv4();
-		const aiPlaceholder: Message = {
-			id: aiMessageId,
-			type: 'ai',
-			content: '',
-		};
-		messages = [...messages, aiPlaceholder];
+		// Track the ID of the latest AI message for streaming updates
+		let currentAiMessageId: string | null = null;
+		// Track the human message ID so we can remove it on error
+		const humanMessageId = messageId;
 
 		try {
 			const result = await submitMessage(
@@ -217,24 +213,50 @@ function createChatStore() {
 				{
 					onToken: (token) => {
 						streamingContent += token;
-						// Update the AI message content
-						messages = messages.map(m =>
-							m.id === aiMessageId
-								? { ...m, content: streamingContent }
-								: m
-						);
+						// Update the latest AI message with streaming content
+						if (currentAiMessageId) {
+							messages = messages.map(m =>
+								m.id === currentAiMessageId
+									? { ...m, content: streamingContent }
+									: m
+							);
+						} else {
+							// No AI message yet - add a placeholder
+							const placeholderId = uuidv4();
+							currentAiMessageId = placeholderId;
+							messages = [...messages, {
+								id: placeholderId,
+								type: 'ai' as const,
+								content: streamingContent,
+							}];
+						}
+					},
+					onMessagesSync: (serverMessages) => {
+						// Sync with server state - this ensures proper message separation
+						// Find the last AI message to track for streaming
+						const lastAi = serverMessages.findLast(m => m.type === 'ai');
+						if (lastAi) {
+							currentAiMessageId = lastAi.id || null;
+							// Reset streaming content to match server state
+							streamingContent = typeof lastAi.content === 'string' ? lastAi.content : '';
+						}
+						messages = [...serverMessages];
 					},
 					onMessage: (message) => {
-						// Update with full message when available
-						messages = messages.map(m =>
-							m.id === aiMessageId
-								? { ...m, ...message, id: aiMessageId }
-								: m
-						);
+						// Update specific message when complete
+						if (message.id && messages.some(m => m.id === message.id)) {
+							messages = messages.map(m =>
+								m.id === message.id ? { ...m, ...message } : m
+							);
+						}
 					},
 					onComplete: (finalMessages, refund) => {
-						// Replace with final state from server
-						messages = finalMessages;
+						// Merge final messages with our current messages
+						// This preserves streaming content while adding server-side messages (like tool results)
+						if (finalMessages && finalMessages.length > 0) {
+							// Use final messages as source of truth, but they should be mostly in sync
+							messages = finalMessages;
+						}
 						isStreaming = false;
 						toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 						
@@ -250,8 +272,10 @@ function createChatStore() {
 					},
 					onError: (err) => {
 						error = err.message;
-						// Remove the placeholder AI message on error
-						messages = messages.filter(m => m.id !== aiMessageId);
+						// Remove any incomplete AI message on error
+						if (currentAiMessageId) {
+							messages = messages.filter(m => m.id !== currentAiMessageId);
+						}
 						isStreaming = false;
 						toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };
 						// Attempt refund on error
@@ -267,14 +291,16 @@ function createChatStore() {
 						// Refresh threads list
 						loadThreads();
 					},
-					// Tool execution callbacks
+					// Tool execution callbacks - update UI in real-time
 					onToolCall: (tools) => {
-						console.log('[Chat] Tool calls received:', tools.map(t => t.name));
+						console.log('[Chat] Tool calls detected:', tools.map(t => t.name));
 						toolStatus = {
 							isExecuting: true,
 							currentTools: tools,
 							lastResults: [],
 						};
+						// Update the AI message to show it's thinking/using tools
+						// This provides visual feedback before tools execute
 					},
 					onToolExecuting: (tools) => {
 						console.log('[Chat] Executing tools:', tools.map(t => t.name));
@@ -286,8 +312,10 @@ function createChatStore() {
 					},
 					onToolComplete: (results) => {
 						console.log('[Chat] Tools completed:', results.map(r => ({ id: r.id, hasError: !!r.error })));
+						// Keep isExecuting true - the agent is still processing
+						// Only set to false on final completion
 						toolStatus = {
-							isExecuting: false,
+							isExecuting: true, // Still processing, just this round of tools done
 							currentTools: [],
 							lastResults: results,
 						};
@@ -300,8 +328,11 @@ function createChatStore() {
 			return true;
 		} catch (e) {
 			error = (e as Error).message;
-			// Remove placeholder on error
-			messages = messages.filter(m => m.id !== aiMessageId);
+			// Remove incomplete AI messages (those with empty content from failed streaming)
+			messages = messages.filter(m => {
+				if (m.type === 'ai' && !m.content) return false;
+				return true;
+			});
 			isLoading = false;
 			isStreaming = false;
 			toolStatus = { isExecuting: false, currentTools: [], lastResults: [] };

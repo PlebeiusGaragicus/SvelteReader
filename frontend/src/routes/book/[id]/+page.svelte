@@ -86,6 +86,53 @@
 	// Track which annotation we're chatting about (to save threadId back to it)
 	let chatAnnotationId = $state<string | null>(null);
 	let chatCfiRange = $state<string | null>(null);
+	
+	// Resizable chat panel state
+	let chatPanelWidth = $state(450); // Default width in pixels (wider than w-96)
+	let isResizing = $state(false);
+	const MIN_PANEL_WIDTH = 320;
+	const MAX_PANEL_WIDTH = 800;
+	
+	// Handle panel resize drag - using document-level capture for smooth dragging
+	function startResize(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		isResizing = true;
+		
+		// Add listeners with capture to ensure we get all events
+		document.addEventListener('mousemove', handleResize, { capture: true });
+		document.addEventListener('mouseup', stopResize, { capture: true });
+		
+		// Prevent text selection and set cursor globally
+		document.body.style.cursor = 'col-resize';
+		document.body.style.userSelect = 'none';
+		document.body.style.pointerEvents = 'none';
+		
+		// Re-enable pointer events on the resize overlay
+		const overlay = document.getElementById('resize-overlay');
+		if (overlay) overlay.style.pointerEvents = 'auto';
+	}
+	
+	function handleResize(e: MouseEvent) {
+		if (!isResizing) return;
+		e.preventDefault();
+		
+		// Calculate new width from right edge of window
+		const newWidth = window.innerWidth - e.clientX;
+		chatPanelWidth = Math.max(MIN_PANEL_WIDTH, Math.min(MAX_PANEL_WIDTH, newWidth));
+	}
+	
+	function stopResize(e?: MouseEvent) {
+		if (!isResizing) return;
+		e?.preventDefault();
+		
+		isResizing = false;
+		document.removeEventListener('mousemove', handleResize, { capture: true });
+		document.removeEventListener('mouseup', stopResize, { capture: true });
+		document.body.style.cursor = '';
+		document.body.style.userSelect = '';
+		document.body.style.pointerEvents = '';
+	}
 
 	// Wallet store for payment integration
 	const wallet = useWalletStore();
@@ -755,41 +802,75 @@
 		{/if}
 
 		{#if showAIChat}
-			<div class="absolute inset-y-0 right-0 top-[53px] z-10 w-96 border-l border-border bg-card text-card-foreground shadow-lg" style="background-color: var(--card); color: var(--card-foreground);">
-				<ChatThread
-					onClose={() => { 
-						showAIChat = false; 
-						chatPassageContext = null; 
-						chatInitialThreadId = null; 
-						chatAnnotationId = null;
-						chatCfiRange = null;
-					}}
-					passageContext={chatPassageContext || undefined}
-					showHistory={true}
-					initialThreadId={chatInitialThreadId || undefined}
-					{generatePayment}
-					bookId={book?.sha256}
-					debugMode={import.meta.env.VITE_DEBUG === 'true' || import.meta.env.DEV}
-					onThreadChange={async (threadId) => {
-						// Update the annotation with the new thread ID (preserve other properties)
-						if (book && threadId && chatCfiRange) {
-							const existingAnnotation = bookAnnotations.find(a => a.cfiRange === chatCfiRange);
-							if (existingAnnotation) {
-								// Add thread ID to annotation
-								await annotations.addChatThread(existingAnnotation.bookSha256, existingAnnotation.cfiRange, threadId);
-								// Get updated annotation and refresh highlight
-								const updated = bookAnnotations.find(a => 
-									a.bookSha256 === existingAnnotation.bookSha256 && a.cfiRange === existingAnnotation.cfiRange
-								);
-								if (updated) {
-									epubService.updateHighlight(updated);
+			<!-- Resize overlay - covers entire screen during resize for smooth dragging -->
+			{#if isResizing}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div 
+					id="resize-overlay"
+					class="fixed inset-0 z-50 cursor-col-resize"
+					onmousemove={handleResize}
+					onmouseup={stopResize}
+					onmouseleave={stopResize}
+				></div>
+			{/if}
+			
+			<!-- Resizable Chat Panel -->
+			<div 
+				class="absolute inset-y-0 right-0 top-[53px] z-10 flex border-l border-border bg-card text-card-foreground shadow-lg" 
+				style="width: {chatPanelWidth}px; background-color: var(--card); color: var(--card-foreground);"
+			>
+				<!-- Resize Handle - wider hit area for easier grabbing -->
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div 
+					class="group absolute -left-2 inset-y-0 w-4 cursor-col-resize z-20 flex items-center justify-center"
+					onmousedown={(e) => { e.stopPropagation(); startResize(e); }}
+					onclick={(e) => e.stopPropagation()}
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize chat panel"
+					tabindex="0"
+				>
+					<!-- Visual indicator - centered within the wider hit area -->
+					<div class="w-1 h-16 rounded-full bg-border/50 group-hover:bg-primary/60 transition-colors"></div>
+				</div>
+				
+				<div class="flex-1 min-w-0">
+					<ChatThread
+						onClose={() => { 
+							showAIChat = false; 
+							chatPassageContext = null; 
+							chatInitialThreadId = null; 
+							chatAnnotationId = null;
+							chatCfiRange = null;
+						}}
+						passageContext={chatPassageContext || undefined}
+						showHistory={true}
+						initialThreadId={chatInitialThreadId || undefined}
+						{generatePayment}
+						bookId={book?.sha256}
+						debugMode={import.meta.env.VITE_DEBUG === 'true' || import.meta.env.DEV}
+						disableClickOutside={isResizing}
+						onThreadChange={async (threadId) => {
+							// Update the annotation with the new thread ID (preserve other properties)
+							if (book && threadId && chatCfiRange) {
+								const existingAnnotation = bookAnnotations.find(a => a.cfiRange === chatCfiRange);
+								if (existingAnnotation) {
+									// Add thread ID to annotation
+									await annotations.addChatThread(existingAnnotation.bookSha256, existingAnnotation.cfiRange, threadId);
+									// Get updated annotation and refresh highlight
+									const updated = bookAnnotations.find(a => 
+										a.bookSha256 === existingAnnotation.bookSha256 && a.cfiRange === existingAnnotation.cfiRange
+									);
+									if (updated) {
+										epubService.updateHighlight(updated);
+									}
 								}
 							}
-						}
-						console.log('Thread changed:', threadId);
-					}}
-					onThreadDelete={handleChatThreadDelete}
-				/>
+							console.log('Thread changed:', threadId);
+						}}
+						onThreadDelete={handleChatThreadDelete}
+					/>
+				</div>
 			</div>
 		{/if}
 	</div>

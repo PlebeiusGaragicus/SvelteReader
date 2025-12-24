@@ -46,6 +46,7 @@ export interface ToolResult {
 export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
+	onMessagesSync?: (messages: Message[]) => void;  // Sync full message state from server
 	onComplete?: (messages: Message[], refund?: boolean) => void;
 	onError?: (error: Error) => void;
 	onThreadId?: (threadId: string) => void;
@@ -174,24 +175,53 @@ export async function submitMessage(
 			
 			console.log(`[LangGraph] Starting stream with input:`, currentInput === null ? 'null (resume)' : 'new message');
 			
-			// Stream the response
+			// Stream the response with both messages (for streaming tokens) and values (for final state)
 			const stream = client.runs.stream(threadId, assistantId, {
 				input: currentInput,
-				streamMode: options.streamMode || ['values'],
+				streamMode: options.streamMode || ['messages', 'values'],
 			});
 			
 			for await (const event of stream) {
-				console.log('[LangGraph] Stream event:', event.event);
-				if (event.data) {
-					console.log('[LangGraph] Event data:', JSON.stringify(event.data, (key, value) => {
-						// Truncate long content for readability
-						if (key === 'content' && typeof value === 'string' && value.length > 200) {
-							return value.slice(0, 200) + '...[truncated]';
+				// Don't log every event - too noisy. Log significant events only.
+				
+				// Handle streaming message chunks (incremental AI content)
+				if (event.event === 'messages/partial') {
+					// This gives us incremental content updates
+					const chunks = event.data as Array<{ type: string; content?: string; tool_calls?: any[] }>;
+					if (chunks && chunks.length > 0) {
+						const lastChunk = chunks[chunks.length - 1];
+						if (lastChunk?.type === 'ai' && lastChunk.content) {
+							const newContent = lastChunk.content;
+							if (newContent.length > currentContent.length) {
+								const newTokens = newContent.slice(currentContent.length);
+								callbacks.onToken?.(newTokens);
+								currentContent = newContent;
+							}
 						}
-						return value;
-					}, 2));
+						// Also detect tool calls early from streaming
+						if (lastChunk?.type === 'ai' && lastChunk.tool_calls && lastChunk.tool_calls.length > 0) {
+							const toolCalls = lastChunk.tool_calls.map((tc: any) => ({
+								id: tc.id,
+								name: tc.name,
+								args: tc.args || {},
+							}));
+							callbacks.onToolCall?.(toolCalls);
+						}
+					}
 				}
 				
+				// Handle complete message events  
+				if (event.event === 'messages/complete') {
+					const completeMessages = event.data as Message[];
+					if (completeMessages && completeMessages.length > 0) {
+						const lastMsg = completeMessages[completeMessages.length - 1];
+						if (lastMsg) {
+							callbacks.onMessage?.(lastMsg);
+						}
+					}
+				}
+				
+				// Handle values events (full state snapshots)
 				if (event.event === 'values') {
 					const data = event.data as { 
 						messages?: Message[]; 
@@ -208,6 +238,9 @@ export async function submitMessage(
 						messages.length = 0;
 						messages.push(...data.messages);
 						
+						// Sync full message state to UI - this ensures proper message separation
+						callbacks.onMessagesSync?.(messages);
+						
 						// Get the latest message
 						const lastMessage = messages[messages.length - 1];
 						
@@ -223,19 +256,9 @@ export async function submitMessage(
 							callbacks.onToolCall?.(pendingToolCalls);
 						}
 						
-						// Stream tokens for AI messages without tool calls
-						if (lastMessage?.type === 'ai' && !(lastMessage as any).tool_calls?.length) {
-							const newContent = typeof lastMessage.content === 'string' 
-								? lastMessage.content 
-								: '';
-							
-							if (newContent.length > currentContent.length) {
-								const newTokens = newContent.slice(currentContent.length);
-								callbacks.onToken?.(newTokens);
-								currentContent = newContent;
-							}
-							
-							callbacks.onMessage?.(lastMessage);
+						// Reset content tracker for next iteration when we get new messages
+						if (lastMessage?.type === 'ai') {
+							currentContent = typeof lastMessage.content === 'string' ? lastMessage.content : '';
 						}
 					}
 				}

@@ -49,17 +49,7 @@
 	</div>
 	
 	<div class="flex max-w-[85%] flex-col gap-2">
-		{#if hasToolCalls && !hideToolCalls}
-			<div class="flex flex-col gap-1">
-				{#each toolCalls as toolCall}
-					<div class="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs">
-						<span class="font-medium text-muted-foreground">Tool: </span>
-						<span class="font-mono">{toolCall.name}</span>
-					</div>
-				{/each}
-			</div>
-		{/if}
-
+		<!-- Content (agent's response/plan) comes FIRST -->
 		{#if content || isStreaming}
 			<div class="rounded-2xl rounded-bl-md bg-muted px-4 py-3">
 				{#if content}
@@ -71,6 +61,18 @@
 						<span class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 300ms"></span>
 					</div>
 				{/if}
+			</div>
+		{/if}
+
+		<!-- Tool calls come AFTER the content (showing what tools were used) -->
+		{#if hasToolCalls && !hideToolCalls}
+			<div class="flex flex-col gap-1">
+				{#each toolCalls as toolCall}
+					<div class="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs">
+						<span class="font-medium text-muted-foreground">Tool: </span>
+						<span class="font-mono">{toolCall.name}</span>
+					</div>
+				{/each}
 			</div>
 		{/if}
 
