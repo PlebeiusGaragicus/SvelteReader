@@ -91,10 +91,9 @@ function extractThreadTitle(messages: Message[]): string | undefined {
 // Map tool names to user-friendly descriptions
 function getToolDescription(toolName: string): string {
 	const descriptions: Record<string, string> = {
-		'get_table_of_contents': 'Reading book structure...',
-		'get_book_metadata': 'Getting book info...',
 		'get_chapter': 'Reading chapter...',
 		'search_book': 'Searching book...',
+		'get_current_page': 'Reading current page...',
 	};
 	return descriptions[toolName] || `Running ${toolName}...`;
 }
@@ -197,6 +196,8 @@ function createChatStore() {
 
 		// Track the ID of the latest AI message for streaming updates
 		let currentAiMessageId: string | null = null;
+		// Track AI message IDs we've already processed to avoid streaming to old messages
+		let knownAiMessageIds = new Set<string>();
 		// Track the human message ID so we can remove it on error
 		const humanMessageId = messageId;
 
@@ -213,32 +214,46 @@ function createChatStore() {
 				{
 					onToken: (token) => {
 						streamingContent += token;
-						// Update the latest AI message with streaming content
+						// Only update if we have a NEW message ID from the server
+						// Don't stream to old messages from previous iterations
 						if (currentAiMessageId) {
 							messages = messages.map(m =>
 								m.id === currentAiMessageId
 									? { ...m, content: streamingContent }
 									: m
 							);
-						} else {
-							// No AI message yet - add a placeholder
-							const placeholderId = uuidv4();
-							currentAiMessageId = placeholderId;
-							messages = [...messages, {
-								id: placeholderId,
-								type: 'ai' as const,
-								content: streamingContent,
-							}];
 						}
+						// If no AI message yet, tokens will be applied when onMessagesSync arrives
+					},
+					onIterationStart: (iteration) => {
+						// Reset streaming state for new iteration
+						// Mark the current message as "known" so we don't stream to it in the next iteration
+						if (currentAiMessageId) {
+							knownAiMessageIds.add(currentAiMessageId);
+						}
+						console.log(`[Chat] Iteration ${iteration} starting - known AI messages: ${knownAiMessageIds.size}`);
+						currentAiMessageId = null;
+						streamingContent = '';
 					},
 					onMessagesSync: (serverMessages) => {
 						// Sync with server state - this ensures proper message separation
-						// Find the last AI message to track for streaming
+						// Find the last AI message that we haven't seen before
 						const lastAi = serverMessages.findLast(m => m.type === 'ai');
-						if (lastAi) {
-							currentAiMessageId = lastAi.id || null;
-							// Reset streaming content to match server state
-							streamingContent = typeof lastAi.content === 'string' ? lastAi.content : '';
+						
+						if (lastAi && lastAi.id) {
+							// Check if this is a NEW AI message (not one from a previous iteration)
+							if (!knownAiMessageIds.has(lastAi.id)) {
+								// New message! Start streaming to it
+								currentAiMessageId = lastAi.id;
+								// Reset streaming content to match server state
+								const serverContent = typeof lastAi.content === 'string' ? lastAi.content : '';
+								streamingContent = serverContent;
+							}
+							// If it's a known message, keep currentAiMessageId as null - don't stream to old messages
+						} else if (!lastAi) {
+							// No AI message yet - reset for fresh start
+							currentAiMessageId = null;
+							streamingContent = '';
 						}
 						messages = [...serverMessages];
 					},
