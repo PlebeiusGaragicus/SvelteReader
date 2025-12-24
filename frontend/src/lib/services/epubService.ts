@@ -1373,7 +1373,6 @@ class EpubService {
 	async getCurrentPageInfo(): Promise<{
 		chapterTitle: string | null;
 		chapterId: string | null;
-		percentage: number;
 		visibleText: string | null;
 	} | null> {
 		if (!this.rendition || !this.book) return null;
@@ -1390,10 +1389,6 @@ class EpubService {
 		// Find matching TOC entry
 		const toc = await this.getTableOfContents();
 		const tocEntry = this.findTocEntryForHref(toc, href);
-
-		// Get location info
-		const locationInfo = this.getCurrentLocation();
-		const percentage = locationInfo?.percentage || 0;
 
 		// Get visible text from the current page
 		let visibleText: string | null = null;
@@ -1414,7 +1409,6 @@ class EpubService {
 		return {
 			chapterTitle: tocEntry?.label || this.extractTitleFromHref(href) || null,
 			chapterId: tocEntry?.id || null,
-			percentage,
 			visibleText,
 		};
 	}
