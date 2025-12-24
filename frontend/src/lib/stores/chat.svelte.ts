@@ -481,10 +481,12 @@ function createChatStore() {
 		}
 	}
 
-	async function loadThreads(): Promise<void> {
+	async function loadThreads(bookId?: string): Promise<void> {
 		isThreadsLoading = true;
 		try {
-			const threadList = await getThreads();
+			// Filter threads by bookId if provided, otherwise use currentBookId
+			const filterBookId = bookId ?? currentBookId ?? undefined;
+			const threadList = await getThreads(filterBookId);
 			
 			// Extract titles from thread values if available
 			threads = threadList.map(t => {

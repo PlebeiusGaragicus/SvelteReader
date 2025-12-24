@@ -99,8 +99,13 @@
 			backendAvailable = available;
 		});
 
-		// Load threads list
-		chat.loadThreads();
+		// Set the current book context for thread scoping
+		if (bookId) {
+			chat.setBookId(bookId);
+		}
+
+		// Load threads list (filtered by bookId if provided)
+		chat.loadThreads(bookId);
 
 		// Set up refund callback for payment recovery
 		// This allows the chat store to refund tokens via CypherTap on errors

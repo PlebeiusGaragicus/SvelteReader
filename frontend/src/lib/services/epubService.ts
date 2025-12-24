@@ -1245,8 +1245,10 @@ class EpubService {
 				const tocEntry = this.findTocEntryForHref(toc, href);
 				
 				if (text.trim()) {
+					// Use href as the ID since that's what epub.js needs for navigation
+					// This ensures citations work correctly when clicked
 					chapters.push({
-						id: item.idref || item.id || href,
+						id: href,
 						title: tocEntry?.label || this.extractTitleFromHref(href),
 						text: text.trim(),
 						href: href,
@@ -1472,6 +1474,237 @@ class EpubService {
 			.replace(/\.(x?html?|xml)$/i, '')
 			.replace(/[-_]/g, ' ')
 			.replace(/^\d+\s*/, ''); // Remove leading numbers
+	}
+
+	/**
+	 * Navigate to a specific passage in the book and highlight it.
+	 * Used for citation navigation from AI chat responses.
+	 * 
+	 * @param chapterId - The chapter ID (from TOC or search results)
+	 * @param searchText - Text snippet to find and highlight in the chapter
+	 * @returns Object with cfiRange if found, or null if navigation failed
+	 */
+	async navigateToPassage(
+		chapterId: string, 
+		searchText: string
+	): Promise<{ cfiRange: string; chapterTitle: string | null } | null> {
+		if (!this.book || !this.rendition) {
+			console.warn('[EpubService] Cannot navigate: book or rendition not ready');
+			return null;
+		}
+
+		console.log(`[EpubService] navigateToPassage: chapterId="${chapterId}", text="${searchText.slice(0, 50)}..."`);
+
+		try {
+			// Resolve the chapter ID to an href using multiple strategies
+			let targetHref: string | null = null;
+			
+			// Strategy 1: Try resolving via TOC
+			const tocHref = await this.resolveTocIdToHref(chapterId);
+			if (tocHref) {
+				targetHref = tocHref.split('#')[0];
+				console.log(`[EpubService] Resolved via TOC: "${chapterId}" -> "${targetHref}"`);
+			}
+			
+			// Strategy 2: Search spine items directly (like getChapterText does)
+			if (!targetHref) {
+				await this.book.loaded.spine;
+				const spine = this.book.spine as any;
+				const items: any[] = spine?.items || [];
+				
+				// Normalize the chapter ID for matching (handle underscores vs dots, etc.)
+				const normalizeForMatch = (s: string) => s.toLowerCase()
+					.replace(/[_\-]/g, '.') // Treat underscores and hyphens like dots
+					.replace(/\.+/g, '.')   // Collapse multiple dots
+					.replace(/^.*\//, '');  // Remove path prefix
+				
+				const normalizedChapterId = normalizeForMatch(chapterId);
+				
+				for (const item of items) {
+					const itemHref = item?.href || '';
+					const itemFilename = itemHref.split('/').pop() || '';
+					const normalizedItemFilename = normalizeForMatch(itemFilename);
+					
+					// Try various matching strategies
+					if (itemHref === chapterId || 
+						itemHref.endsWith(chapterId) || 
+						chapterId.endsWith(itemHref) ||
+						itemFilename === chapterId.split('/').pop() ||
+						// Normalize and compare (handles ch002_xhtml vs ch002.xhtml)
+						normalizedItemFilename === normalizedChapterId ||
+						normalizedItemFilename.startsWith(normalizedChapterId.replace(/\..*$/, '')) ||
+						// Check if chapterId contains a recognizable part of the filename
+						itemFilename.replace(/\.[^.]+$/, '') === chapterId.replace(/[_.].*$/, '')) {
+						targetHref = itemHref;
+						console.log(`[EpubService] Resolved via spine: "${chapterId}" -> "${targetHref}"`);
+						break;
+					}
+				}
+			}
+			
+			// Strategy 3: Transform underscores to dots and try as path
+			if (!targetHref) {
+				const transformedId = chapterId.replace(/_/g, '.');
+				if (transformedId !== chapterId) {
+					// Try with the transformed ID
+					const spine = this.book.spine as any;
+					const items: any[] = spine?.items || [];
+					for (const item of items) {
+						const itemHref = item?.href || '';
+						if (itemHref.endsWith(transformedId) || 
+							itemHref.split('/').pop() === transformedId) {
+							targetHref = itemHref;
+							console.log(`[EpubService] Resolved via transform: "${chapterId}" -> "${targetHref}"`);
+							break;
+						}
+					}
+				}
+			}
+			
+			// Strategy 4: Use as-is if it looks like a path
+			if (!targetHref && (chapterId.includes('/') || chapterId.includes('.xhtml') || chapterId.includes('.html'))) {
+				targetHref = chapterId;
+				console.log(`[EpubService] Using chapterId as href directly: "${targetHref}"`);
+			}
+			
+			if (!targetHref) {
+				console.warn(`[EpubService] Could not resolve chapter ID: "${chapterId}"`);
+				return null;
+			}
+
+			// Navigate to the chapter
+			await this.rendition.display(targetHref);
+
+			// Wait a moment for rendering to complete
+			await new Promise(resolve => setTimeout(resolve, 300));
+
+			// Get the chapter title from TOC
+			const chapterTitle = this.getChapterTitleById(chapterId);
+
+			// Now search for the text in the rendered content
+			const contents = this.rendition.getContents() as any;
+			if (!contents || contents.length === 0) {
+				console.warn('[EpubService] No contents available after navigation');
+				return { cfiRange: '', chapterTitle };
+			}
+
+			const content = contents[0];
+			const doc = content?.document;
+			if (!doc) {
+				console.warn('[EpubService] No document available in contents');
+				return { cfiRange: '', chapterTitle };
+			}
+
+			// Normalize the search text (handle whitespace differences)
+			const normalizedSearch = searchText.replace(/\s+/g, ' ').trim().slice(0, 100);
+			
+			// Use TreeWalker to find text nodes containing the passage
+			const walker = doc.createTreeWalker(
+				doc.body,
+				NodeFilter.SHOW_TEXT,
+				null
+			);
+
+			let foundNode: Text | null = null;
+			let foundOffset = 0;
+			let accumulatedText = '';
+			const textNodes: Array<{ node: Text; start: number }> = [];
+
+			// Collect all text nodes and their positions
+			let node: Text | null;
+			while ((node = walker.nextNode() as Text | null)) {
+				const nodeText = node.textContent || '';
+				textNodes.push({ node, start: accumulatedText.length });
+				accumulatedText += nodeText;
+			}
+
+			// Search for the normalized text in accumulated text
+			const normalizedAccumulated = accumulatedText.replace(/\s+/g, ' ');
+			const searchIndex = normalizedAccumulated.toLowerCase().indexOf(normalizedSearch.toLowerCase());
+
+			if (searchIndex === -1) {
+				console.log('[EpubService] Text not found in chapter, navigated to chapter start');
+				return { cfiRange: '', chapterTitle };
+			}
+
+			// Find which text node contains the start of the match
+			let charCount = 0;
+			for (const { node: textNode, start } of textNodes) {
+				const nodeText = (textNode.textContent || '').replace(/\s+/g, ' ');
+				const nodeEnd = charCount + nodeText.length;
+				
+				if (searchIndex >= charCount && searchIndex < nodeEnd) {
+					foundNode = textNode;
+					foundOffset = searchIndex - charCount;
+					break;
+				}
+				charCount = nodeEnd;
+			}
+
+			if (foundNode) {
+				// Try to create a CFI for this position
+				try {
+					const section = (this.book.spine as any).get(targetHref);
+					if (section) {
+						// Create a range for the found text
+						const range = doc.createRange();
+						const startOffset = Math.min(foundOffset, (foundNode.textContent?.length || 0) - 1);
+						const endOffset = Math.min(startOffset + normalizedSearch.length, foundNode.textContent?.length || 0);
+						
+						range.setStart(foundNode, Math.max(0, startOffset));
+						range.setEnd(foundNode, Math.max(startOffset, endOffset));
+
+						// Generate CFI from the range
+						const cfi = section.cfiFromRange(range);
+						if (cfi) {
+							console.log(`[EpubService] Found passage, navigating to CFI: ${cfi}`);
+							
+							// Navigate to the CFI location (this scrolls to the passage)
+							await this.rendition.display(cfi);
+							
+							// Add a temporary highlight after navigation
+							setTimeout(() => {
+								try {
+									this.rendition?.annotations.highlight(cfi, {}, undefined, 'citation-highlight');
+									
+									// Remove highlight after 5 seconds
+									setTimeout(() => {
+										try {
+											this.rendition?.annotations.remove(cfi, 'highlight');
+										} catch (e) {
+											// Ignore cleanup errors
+										}
+									}, 5000);
+								} catch (e) {
+									console.warn('[EpubService] Failed to add citation highlight:', e);
+								}
+							}, 100);
+
+							return { cfiRange: cfi, chapterTitle };
+						}
+					}
+				} catch (cfiError) {
+					console.warn('[EpubService] Failed to create CFI:', cfiError);
+				}
+
+				// Fallback: scroll the found text into view
+				try {
+					const range = doc.createRange();
+					range.selectNodeContents(foundNode);
+					const selection = content.window.getSelection();
+					selection?.removeAllRanges();
+					selection?.addRange(range);
+					foundNode.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				} catch (scrollError) {
+					console.warn('[EpubService] Failed to scroll to text:', scrollError);
+				}
+			}
+
+			return { cfiRange: '', chapterTitle };
+		} catch (error) {
+			console.error('[EpubService] navigateToPassage error:', error);
+			return null;
+		}
 	}
 
 	destroy(): void {

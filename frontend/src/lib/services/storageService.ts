@@ -13,6 +13,8 @@ export interface StoredVectorIndex {
 		chapterTitle: string;
 		text: string;
 		embedding: number[];
+		startOffset: number;  // Character offset within chapter
+		endOffset: number;    // End character offset within chapter
 	}>;
 }
 

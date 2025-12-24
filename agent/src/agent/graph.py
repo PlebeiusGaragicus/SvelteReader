@@ -195,7 +195,29 @@ def get_system_prompt(
 3. **Handle errors gracefully**: If a tool returns an error, explain the issue to the user rather than retrying endlessly
 4. **Maximum 3 tool calls** for simple requests - don't loop trying different approaches
 5. **If content is unavailable**: Tell the user honestly rather than making up information
-6. **Cite sources**: Always mention which chapter information came from
+6. **Cite sources with clickable references**: See Citation Format below
+
+## Citation Format
+
+When referencing content from the book, use this exact format to create clickable citations:
+
+**Format**: `[[chapter_id|"quoted text excerpt"]]`
+
+**Examples**:
+- `[[chapter-3|"The fundamental principle of liberty..."]]`
+- `[[np-5|"propaganda relies on repetition"]]`
+
+**Rules for citations**:
+1. Use the EXACT chapter_id from the Table of Contents or search results
+2. Quote a short, distinctive text excerpt (10-50 words) that can be found in the chapter
+3. Citations become clickable links that navigate to the exact passage
+4. Include at least one citation when answering questions based on specific passages
+5. For search results, use the chapter_id shown in brackets (e.g., `[chapter-3]`)
+
+**When to cite**:
+- After using search_book(): cite the relevant passages you found
+- After using get_chapter(): cite key excerpts that answer the question
+- When discussing specific quotes or ideas from the book
 
 ## Error Handling
 

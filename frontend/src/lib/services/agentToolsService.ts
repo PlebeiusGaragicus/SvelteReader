@@ -265,12 +265,28 @@ async function executeSearchBook(
 		}
 		
 		// Execute all queries and collect results
-		const allResults: Array<{ query: string; chapter: string; text: string; score: number }> = [];
+		const allResults: Array<{ 
+			query: string; 
+			chapter: string; 
+			chapterId: string;
+			text: string; 
+			score: number;
+			startOffset?: number;
+			endOffset?: number;
+		}> = [];
 		
 		for (const query of queries) {
 			const results = await vectorService.search(query, bookId, topK);
 			results.forEach(r => {
-				allResults.push({ query, chapter: r.chapter, text: r.text, score: r.score });
+				allResults.push({ 
+					query, 
+					chapter: r.chapter, 
+					chapterId: r.chapterId,
+					text: r.text, 
+					score: r.score,
+					startOffset: r.startOffset,
+					endOffset: r.endOffset,
+				});
 			});
 		}
 		
@@ -296,10 +312,15 @@ async function executeSearchBook(
 			.sort((a, b) => b.score - a.score)
 			.slice(0, Math.min(15, topK * queries.length));
 		
-		// Format results for the agent
-		const formatted = dedupedResults.map((r, i) => 
-			`[Result ${i + 1}] (Chapter: ${r.chapter}, Score: ${r.score.toFixed(2)}, Query: "${r.query}")\n${r.text}`
-		).join('\n\n---\n\n');
+		// Format results for the agent with citation metadata
+		// Include chapter ID and text excerpt for clickable citations
+		const formatted = dedupedResults.map((r, i) => {
+			// Include position info for precise navigation
+			const positionInfo = r.startOffset !== undefined 
+				? `, Position: chars ${r.startOffset}-${r.endOffset}` 
+				: '';
+			return `[Result ${i + 1}] (Chapter: "${r.chapter}" [${r.chapterId}]${positionInfo}, Score: ${r.score.toFixed(2)})\n${r.text}`;
+		}).join('\n\n---\n\n');
 		
 		return {
 			id: toolCallId,
