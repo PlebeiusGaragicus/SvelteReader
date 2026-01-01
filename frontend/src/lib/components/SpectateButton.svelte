@@ -22,7 +22,7 @@
 	let editingHistoryEntry = $state<SpectateHistoryEntry | null>(null);
 	
 	// Refs for click-outside detection
-	let popoverRef: HTMLDivElement;
+	let popoverRef = $state<HTMLDivElement>();
 	let buttonRef: HTMLButtonElement;
 	
 	// Copy button state
@@ -354,6 +354,13 @@
 			bind:this={popoverRef}
 			class="absolute right-0 top-full mt-2 w-96 rounded-lg border border-border bg-popover p-4 shadow-lg z-50"
 			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => {
+				if (e.key === 'Escape') closePopover();
+				e.stopPropagation();
+			}}
+			role="dialog"
+			aria-label="Spectate options"
+			tabindex="-1"
 		>
 			{#if currentView === 'history'}
 				<!-- History View -->

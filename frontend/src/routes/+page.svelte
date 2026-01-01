@@ -62,7 +62,7 @@
 
 	// Drag and drop state
 	let isDragging = $state(false);
-	let importButtonRef: ImportButton;
+	let importButtonRef = $state<ImportButton>();
 
 	function handleDragOver(e: DragEvent) {
 		e.preventDefault();

@@ -1,5 +1,5 @@
-import ePub, { Book, Rendition } from 'epubjs';
-import type { NavItem } from 'epubjs';
+import ePub from 'epubjs';
+import type { Book, Rendition, NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
 import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationLocal, AnnotationColor } from '$lib/types';
 import { AppError, getAnnotationDisplayColor, annotationHasChat, annotationHasNote } from '$lib/types';

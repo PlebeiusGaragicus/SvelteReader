@@ -18,6 +18,8 @@ The backend serves as a middleware layer that:
 
 1. Install dependencies:
 
+NOTE: ⚠️ you'll also need to run `brew install` or `apt-get install` for `pkg-config` as it's needed by `secp256k1`
+
 ```bash
 cd backend
 pip install -e .

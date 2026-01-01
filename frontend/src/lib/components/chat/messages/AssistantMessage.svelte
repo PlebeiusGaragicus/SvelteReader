@@ -121,8 +121,9 @@
 			<div class="flex flex-col gap-1.5">
 				{#each toolCalls as toolCall}
 					{@const formatted = formatToolCall(toolCall)}
+					{@const Icon = formatted.icon}
 					<div class="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
-						<svelte:component this={formatted.icon} class="h-4 w-4 shrink-0" />
+						<Icon class="h-4 w-4 shrink-0" />
 						<span>{formatted.text}</span>
 					</div>
 				{/each}

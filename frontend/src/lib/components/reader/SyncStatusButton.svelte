@@ -5,7 +5,7 @@
 	import { cyphertap } from 'cyphertap';
 
 	let showPopover = $state(false);
-	let containerElement: HTMLDivElement;
+	let containerElement = $state<HTMLDivElement>();
 
 	// Use CypherTap's reactive state directly
 	// isLoggedIn = user exists, isReady = fully initialized (NDK + wallet ready)

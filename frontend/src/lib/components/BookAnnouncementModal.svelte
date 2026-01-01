@@ -13,12 +13,12 @@
 	let { book, isOpen, onClose, onSave }: Props = $props();
 
 	// Editable form state
-	let title = $state(book.title);
-	let author = $state(book.author);
-	let year = $state(book.year?.toString() || '');
-	let isbn = $state(book.isbn || '');
-	let coverBase64 = $state(book.coverBase64 || '');
-	let isPublic = $state(book.isPublic ?? true);
+	let title = $state('');
+	let author = $state('');
+	let year = $state('');
+	let isbn = $state('');
+	let coverBase64 = $state('');
+	let isPublic = $state(true);
 	let isSaving = $state(false);
 	let error = $state<string | null>(null);
 	
