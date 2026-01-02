@@ -184,6 +184,15 @@ class EpubService {
 	private setupContentHandlers(): void {
 		if (!this.rendition) return;
 
+		// Hook into content rendering to apply theme
+		// This is critical because epub.js has a bug where CSS themes aren't auto-injected on chapter change
+		this.rendition.hooks.content.register((contents: any) => {
+			// Only apply if we have a theme CSS set
+			if (this.currentThemeCss) {
+				this.applyThemeToContent(contents);
+			}
+		});
+
 		// Handle keyboard events within the iframe
 		this.rendition.on('keyup', (event: KeyboardEvent) => {
 			if (event.key === 'ArrowLeft') {
@@ -547,33 +556,218 @@ class EpubService {
 		}
 	}
 
+	private currentTheme: 'light' | 'dark' | 'sepia' = 'light';
+	private currentThemeCss: string = '';
+
+	/**
+	 * Theme color definitions
+	 */
+	private readonly themeColors = {
+		light: {
+			bg: '#ffffff',
+			text: '#1a1a1a',
+			link: '#2563eb'
+		},
+		dark: {
+			bg: '#1a1a1a',
+			text: '#e5e5e5',
+			link: '#8bb4e8'
+		},
+		sepia: {
+			bg: '#f4ecd8',
+			text: '#5c4b37',
+			link: '#7a5c42'
+		}
+	};
+
+	/**
+	 * Apply theme to a specific content document
+	 * This handles both CSS injection and inline style stripping
+	 * Called for each content (chapter) that loads
+	 */
+	private applyThemeToContent(contents: any): void {
+		try {
+			const doc = contents.document;
+			if (!doc) return;
+
+			// 1. Inject our theme CSS directly into the document
+			this.injectThemeCss(doc);
+
+			// 2. Strip inline color styles that would override our theme
+			this.stripInlineColorStyles(doc);
+
+			// 3. Override EPUB's embedded stylesheets
+			this.overrideEpubStyles(doc);
+
+		} catch (e) {
+			console.warn('Failed to apply theme to content:', e);
+		}
+	}
+
+	/**
+	 * Inject theme CSS directly into the document head
+	 */
+	private injectThemeCss(doc: Document): void {
+		const styleId = 'sveltereader-theme';
+		
+		// Remove existing theme style if present
+		const existing = doc.getElementById(styleId);
+		if (existing) {
+			existing.remove();
+		}
+
+		// Create and inject new style element
+		const style = doc.createElement('style');
+		style.id = styleId;
+		style.textContent = this.currentThemeCss;
+		doc.head.appendChild(style);
+	}
+
+	/**
+	 * Strip inline color styles from all elements
+	 */
+	private stripInlineColorStyles(doc: Document): void {
+		// Find all elements with inline style containing 'color'
+		const elements = doc.querySelectorAll('[style]');
+		elements.forEach((el: Element) => {
+			const style = el.getAttribute('style');
+			if (style) {
+				// Use regex to remove color property (but not background-color)
+				// Handles various formats: color:, color :, color  :
+				const newStyle = style
+					.replace(/(?<![a-z-])color\s*:\s*[^;]+;?/gi, '')
+					.trim();
+				
+				if (newStyle && newStyle !== style) {
+					el.setAttribute('style', newStyle);
+				} else if (!newStyle) {
+					el.removeAttribute('style');
+				}
+			}
+		});
+
+		// Handle legacy font elements with color attribute
+		const fontElements = doc.querySelectorAll('font[color]');
+		fontElements.forEach((el: Element) => {
+			el.removeAttribute('color');
+		});
+	}
+
+	/**
+	 * Override color definitions in EPUB's embedded stylesheets
+	 */
+	private overrideEpubStyles(doc: Document): void {
+		const colors = this.themeColors[this.currentTheme];
+		
+		// Iterate through all stylesheets in the document
+		try {
+			const styleSheets = doc.styleSheets;
+			for (let i = 0; i < styleSheets.length; i++) {
+				const sheet = styleSheets[i] as CSSStyleSheet;
+				// Skip our own injected stylesheet
+				const ownerNode = sheet.ownerNode as HTMLElement;
+				if (ownerNode?.id === 'sveltereader-theme') continue;
+				
+				try {
+					// Try to access the rules (may fail due to CORS for external sheets)
+					const rules = sheet.cssRules || sheet.rules;
+					if (!rules) continue;
+
+					for (let j = 0; j < rules.length; j++) {
+						const rule = rules[j] as CSSStyleRule;
+						if (rule.style) {
+							// Override color property if it exists
+							if (rule.style.color) {
+								rule.style.setProperty('color', colors.text, 'important');
+							}
+						}
+					}
+				} catch (e) {
+					// CORS error accessing external stylesheet - skip it
+				}
+			}
+		} catch (e) {
+			// StyleSheets API not available
+		}
+	}
+
+	/**
+	 * Generate CSS string for a theme
+	 */
+	private generateThemeCss(theme: 'light' | 'dark' | 'sepia'): string {
+		const colors = this.themeColors[theme];
+
+		// Very aggressive CSS to override any EPUB styles
+		// Using high specificity and !important on everything
+		return `
+			/* Base styles with high specificity */
+			html, body {
+				background-color: ${colors.bg} !important;
+				color: ${colors.text} !important;
+			}
+			
+			/* Target all possible text-containing elements */
+			html *, body * {
+				color: ${colors.text} !important;
+			}
+			
+			/* Explicit element list for older epub.js/browser compatibility */
+			p, div, span, h1, h2, h3, h4, h5, h6, 
+			li, ul, ol, blockquote, em, strong, i, b, u,
+			section, article, header, footer, aside, nav, main,
+			figure, figcaption, table, td, th, tr, caption,
+			pre, code, small, sub, sup, mark, del, ins,
+			cite, q, dfn, abbr, address, time, var, samp, kbd,
+			label, legend, dt, dd, details, summary, font {
+				color: ${colors.text} !important;
+			}
+			
+			/* Links get a distinct color */
+			a, a:link, a:visited, a:hover, a:active,
+			a *, a:link *, a:visited *, a:hover *, a:active * {
+				color: ${colors.link} !important;
+			}
+		`;
+	}
+
 	applyTheme(theme: 'light' | 'dark' | 'sepia'): void {
 		if (!this.rendition) return;
 
-		const colors = {
-			light: { bg: '#ffffff', text: '#1a1a1a' },
-			dark: { bg: '#1a1a1a', text: '#e5e5e5' },
-			sepia: { bg: '#f4ecd8', text: '#5c4b37' }
-		};
-
-		const { bg, text } = colors[theme];
-
-		// Use CSS override for better compatibility with scrolled-doc mode
-		this.rendition.themes.default({
-			'body': {
-				'background-color': `${bg} !important`,
-				'color': `${text} !important`
-			},
-			'p, div, span, h1, h2, h3, h4, h5, h6, li, a': {
-				'color': `${text} !important`
-			}
+		this.currentTheme = theme;
+		this.currentThemeCss = this.generateThemeCss(theme);
+		
+		// Apply to all currently loaded content
+		const contents = this.rendition.getContents();
+		contents.forEach((content: any) => {
+			this.applyThemeToContent(content);
 		});
 	}
 
 	applyFontSize(size: number): void {
-		if (this.rendition) {
-			this.rendition.themes.fontSize(`${size}%`);
-		}
+		if (!this.rendition) return;
+		// Use epub.js built-in fontSize method which uses the override mechanism
+		this.rendition.themes.fontSize(`${size}%`);
+	}
+
+	applyFontFamily(family: string): void {
+		if (!this.rendition) return;
+
+		// Map font family names to CSS font stacks
+		const fontStacks: Record<string, string> = {
+			'original': 'inherit',
+			'georgia': 'Georgia, serif',
+			'palatino': '"Palatino Linotype", "Book Antiqua", Palatino, serif',
+			'times': '"Times New Roman", Times, serif',
+			'arial': 'Arial, sans-serif',
+			'helvetica': 'Helvetica, Arial, sans-serif',
+			'verdana': 'Verdana, Geneva, sans-serif'
+		};
+
+		const fontStack = fontStacks[family] || 'inherit';
+
+		// Use epub.js built-in font method which uses the override mechanism
+		// This doesn't interfere with theme colors
+		this.rendition.themes.font(fontStack);
 	}
 
 	onTextSelected(callback: (selection: TextSelection | null) => void): void {
@@ -1807,6 +2001,8 @@ class EpubService {
 		this.loadedAnnotations = [];
 		this.renderedListenerAttached = false;
 		this.toc = [];
+		this.currentTheme = 'light';
+		this.currentThemeCss = '';
 	}
 }
 

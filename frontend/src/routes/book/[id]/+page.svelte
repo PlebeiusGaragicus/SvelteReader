@@ -27,6 +27,7 @@
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { getThreads } from '$lib/services/langgraph';
+	import { useSettingsStore } from '$lib/stores/settings.svelte';
 	
 	// Check if we're in spectate mode (view-only)
 	const isSpectating = $derived(spectateStore.isSpectating);
@@ -136,6 +137,7 @@
 
 	// Wallet store for payment integration
 	const wallet = useWalletStore();
+	const readerSettings = useSettingsStore();
 
 	// Sync wallet state with CypherTap
 	$effect(() => {
@@ -181,6 +183,22 @@
 			epubService.applyTheme(mode.current === 'dark' ? 'dark' : 'light');
 		}
 	});
+
+	// Apply reader settings when book is ready or settings change
+	$effect(() => {
+		if (isBookReady) {
+			epubService.applyFontSize(readerSettings.fontSize);
+			epubService.applyFontFamily(readerSettings.fontFamily);
+		}
+	});
+
+	// Callback to re-apply settings when changed from settings panel
+	function handleSettingsChange() {
+		if (isBookReady) {
+			epubService.applyFontSize(readerSettings.fontSize);
+			epubService.applyFontFamily(readerSettings.fontFamily);
+		}
+	}
 
 	// Reload annotations in epub reader when store changes (e.g., after sync)
 	$effect(() => {
@@ -479,11 +497,17 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === 'ArrowLeft') {
+		// Don't intercept keyboard events when user is typing in an input or textarea
+		const target = event.target as HTMLElement;
+		const isTyping = target.tagName === 'INPUT' || 
+			target.tagName === 'TEXTAREA' || 
+			target.isContentEditable;
+		
+		if (event.key === 'ArrowLeft' && !isTyping) {
 			handlePrevPage();
 			// Close popup on page turn
 			handlePopupClose();
-		} else if (event.key === 'ArrowRight') {
+		} else if (event.key === 'ArrowRight' && !isTyping) {
 			handleNextPage();
 			// Close popup on page turn
 			handlePopupClose();
@@ -727,7 +751,7 @@
 		{/if}
 		
 		{#if showSettings}
-			<SettingsPanel onClose={() => (showSettings = false)} />
+			<SettingsPanel onClose={() => (showSettings = false)} onSettingsChange={handleSettingsChange} />
 		{/if}
 	</div>
 {:else if !book}
@@ -806,7 +830,7 @@
 		{/if}
 
 		{#if showSettings}
-			<SettingsPanel onClose={() => (showSettings = false)} />
+			<SettingsPanel onClose={() => (showSettings = false)} onSettingsChange={handleSettingsChange} />
 		{/if}
 
 		{#if textSelection || editingAnnotation}

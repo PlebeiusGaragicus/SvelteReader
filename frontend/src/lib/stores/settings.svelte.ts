@@ -2,18 +2,30 @@
  * Settings Store - Reactive store for app settings with localStorage persistence
  * 
  * Note: Annotation publishing is controlled per-book via book.isPublic.
- * This store is reserved for future reader settings (font size, theme, etc.)
+ * This store handles reader settings (font size, font family, etc.)
  */
 
 import { browser } from '$app/environment';
 
 const STORAGE_KEY = 'sveltereader-settings';
 
-interface Settings {
-	// Reserved for future settings (font size, theme, etc.)
+export type FontFamily = 'original' | 'georgia' | 'palatino' | 'times' | 'arial' | 'helvetica' | 'verdana';
+
+export interface ReaderSettings {
+	fontSize: number; // Percentage (100 = 100%)
+	fontFamily: FontFamily;
 }
 
-const DEFAULT_SETTINGS: Settings = {};
+interface Settings {
+	reader: ReaderSettings;
+}
+
+const DEFAULT_SETTINGS: Settings = {
+	reader: {
+		fontSize: 100,
+		fontFamily: 'original'
+	}
+};
 
 function loadSettings(): Settings {
 	if (!browser) return DEFAULT_SETTINGS;
@@ -21,7 +33,12 @@ function loadSettings(): Settings {
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
 		if (stored) {
-			return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+			const parsed = JSON.parse(stored);
+			return { 
+				...DEFAULT_SETTINGS, 
+				...parsed,
+				reader: { ...DEFAULT_SETTINGS.reader, ...parsed.reader }
+			};
 		}
 	} catch (e) {
 		console.error('Failed to load settings:', e);
@@ -41,15 +58,36 @@ function saveSettings(settings: Settings): void {
 
 function createSettingsStore() {
 	let initialized = false;
+	let settings = $state<Settings>(DEFAULT_SETTINGS);
 
 	function initialize(): void {
 		if (initialized || !browser) return;
-		loadSettings();
+		settings = loadSettings();
 		initialized = true;
 	}
 
+	function setFontSize(size: number): void {
+		const clampedSize = Math.max(50, Math.min(200, size));
+		settings.reader.fontSize = clampedSize;
+		saveSettings(settings);
+	}
+
+	function setFontFamily(family: FontFamily): void {
+		settings.reader.fontFamily = family;
+		saveSettings(settings);
+	}
+
+	function increaseFontSize(): void {
+		setFontSize(settings.reader.fontSize + 10);
+	}
+
+	function decreaseFontSize(): void {
+		setFontSize(settings.reader.fontSize - 10);
+	}
+
 	function reset(): void {
-		saveSettings(DEFAULT_SETTINGS);
+		settings = { ...DEFAULT_SETTINGS };
+		saveSettings(settings);
 	}
 
 	// Auto-initialize on first access in browser
@@ -58,7 +96,14 @@ function createSettingsStore() {
 	}
 
 	return {
+		get reader() { return settings.reader; },
+		get fontSize() { return settings.reader.fontSize; },
+		get fontFamily() { return settings.reader.fontFamily; },
 		initialize,
+		setFontSize,
+		setFontFamily,
+		increaseFontSize,
+		decreaseFontSize,
 		reset,
 	};
 }
