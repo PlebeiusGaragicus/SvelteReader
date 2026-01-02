@@ -1,48 +1,62 @@
-### Library Management
+# Library Management
 
-| Feature | Status | Description |
-|---------|--------|-------------|
-| EPUB Import | ✅ | Import EPUB files from local filesystem |
-| Book Grid | ✅ | Visual library with cover images and progress bars |
-| Reading Progress | ✅ | Track and display reading progress per book |
-| Delete Books | ✅ | Remove books via context menu |
-| Ghost Books | ✅ | Show synced annotations even without EPUB downloaded |
-| SHA-256 Identity | ✅ | Content-addressable books by file hash |
+`Book announcements`: Books are "announced" to Nostr with their metadata and cover image.  They include a SHA256 hash to ensure all user's are talking about the exact same data file (so annotation cfiRanges can be assured to work). Annotations reference their parent book announcement via NIP-01 `a` tag.  Each use will have their own "book announcement" which will indicate the existance of that book on their "bookshelf."  Users with announcements sharing a SHA256 hash may indicate shared interest in the same book and will be the core feature by which user's discover each other.
 
-### Sync (Nostr Protocol)
+Book metadata should be editable and does not effect that book's SHA256, to include cover image.
 
-| Feature | Status | Description |
-|---------|--------|-------------|
-| Annotation Publishing | 🚧 | Publish annotations as kind 30078 events |
-| Book Announcements | 🚧 | Publish book metadata as kind 30801 events |
-| Multi-Device Sync | 🚧 | Fetch annotations from relays on login |
-| LWW Conflict Resolution | ✅ | Last Write Wins via `created_at` |
-| Relay Configuration | 🚧 | User-configurable relay list |
+Books announcements are nostr kind `30801` because:
 
-### Spectating
+- Addressable range (30000-39999)
+- Adjacent to annotation kind 30800
+- Unique per pubkey + kind + d-tag (SHA-256)
 
-| Feature | Status | Description |
-|---------|--------|-------------|
-| Browse Others' Libraries | ✅ | Read-only view of another user's books |
-| Spectate History | ✅ | Remember previously viewed users |
-| Relay Customization | ✅ | Specify relays for each spectated user |
-| Visual Indicators | ✅ | Blue tint and badges for spectate mode |
-| Read-Only Enforcement | ✅ | Disable edit actions when spectating |
+Book announcements include a cover image which is base64 encoded and included in the nostr event
+
+**Cover Image Constraints:**
+- Format: JPEG (best compression for photos)
+- Dimensions: ~128x192 pixels (2:3 aspect ratio, book cover standard)
+- Max size: ~20KB base64 encoded
+- Embedded as data URL per NIP-100 discussion
 
 
-# Book Sync Design
+- 128x192 JPEG at quality 0.7 ≈ 5-15KB
+- Base64 encoding adds ~33% overhead
+- Final data URL: ~7-20KB
+- Well within Nostr event size limits (~64KB typical)
 
-> Design document for Nostr-based book announcements and sync.
+Conflict Resolution is handled the same as annotations: **Last Write Wins (LWW)** using `created_at`.
 
-## Overview
+- Book metadata updates replace previous versions
+- Relays keep only latest event per pubkey+kind+d-tag
+- Local changes marked `syncPending` until published
 
-SvelteReader extends its annotation-first sync to include **book announcements**:
-- Books can be "announced" to Nostr with metadata and cover image
-- Annotations reference their parent book announcement via NIP-01 `a` tag
-- Ghost books can be created from synced book announcements (metadata only, no EPUB)
-- Users can "complete" ghost books by uploading matching EPUBs (SHA-256 verified)
+---
 
-## User Flow
+
+`Ghost books`: are books not yet in a user's library, for which we have a "book announcement." These are metadata only, no EPUB. Users can "complete" ghost books by uploading matching EPUBs (SHA-256 verified). These are seen when a user logs into a new device and has yet to "complete the book" by provding the data file, or when a user is spectating another's library and does not have that book in their local browser storage.
+
+
+When annotations exist for a book that isn't downloaded locally:
+
+1. Book appears in library with `hasEpubData: false`
+2. UI shows "Download to read" prompt
+3. User can still view annotation list
+4. Opening the book prompts for EPUB file
+
+This enables:
+- Syncing annotations from another device before downloading books
+- Importing someone else's annotations for a book you'll get later
+
+---
+
+`bookshelf`
+
+  - As each book is uploaded by a user and added to their library, we respect their choice to sync with nostr or to keep only local copies of data.  Local-only books may be sync'd at a later time, if the user selects "Sync to Nostr" in the book's "edit metadata" modal.
+
+
+
+
+## User Flows
 
 ### 1. Book Upload & Announcement
 
@@ -161,16 +175,6 @@ Addressable event for book metadata:
 }
 ```
 
-**Why kind 30801?**
-- Addressable range (30000-39999)
-- Adjacent to annotation kind 30800
-- Unique per pubkey + kind + d-tag (SHA-256)
-
-**Cover Image Constraints:**
-- Format: JPEG (best compression for photos)
-- Dimensions: ~128x192 pixels (2:3 aspect ratio, book cover standard)
-- Max size: ~20KB base64 encoded
-- Embedded as data URL per NIP-100 discussion
 
 ### Updated Annotation Event (kind 30800)
 
@@ -240,12 +244,6 @@ New modal shown after EPUB upload:
 └─────────────────────────────────────┘
 ```
 
-**Cover Cropping:**
-- Use a simple cropper (e.g., `svelte-easy-crop` or custom)
-- Fixed 2:3 aspect ratio
-- Output: 128x192 JPEG, quality ~0.7
-- Show file size estimate
-
 ### 2. Extended BookCard Menu
 
 For ghost books, add "Upload EPUB" option:
@@ -306,65 +304,6 @@ The global settings panel now shows informational text about per-book sync:
 └─────────────────────────────────┘
 ```
 
-## Implementation Plan
-
-### Phase 1: Core Types & Services
-
-1. **Update types** (`frontend/src/lib/types/index.ts`)
-   - Add `isPublic`, `nostrEventId`, `nostrCreatedAt`, `relays`, `syncPending` to `Book`
-
-2. **Create book Nostr types** (`frontend/src/lib/types/nostr.ts`)
-   - Add `BOOK_EVENT_KIND = 30801`
-   - Add `bookToEvent()`, `eventToBook()` functions
-   - Add `bookDeletionEvent()` function
-
-3. **Extend nostrService** (`frontend/src/lib/services/nostrService.ts`)
-   - Add `publishBook()`, `fetchBooks()`, `publishBookDeletion()`
-
-4. **Update annotation events**
-   - Add `a` tag reference to book announcement in `annotationToEvent()`
-
-### Phase 2: Sync Store Updates
-
-1. **Extend syncStore** (`frontend/src/lib/stores/sync.svelte.ts`)
-   - Fetch both books and annotations
-   - Track book sync stats
-   - Create ghost books for unknown SHA-256s
-
-2. **Update books store** (`frontend/src/lib/stores/books.ts`)
-   - Add `mergeFromNostr()` for book sync
-   - Add `setCyphertap()` for publishing
-   - Add `publishBook()`, `republishBook()` methods
-
-### Phase 3: UI Components
-
-1. **BookAnnouncementModal** (new component)
-   - Cover cropper
-   - Metadata editor
-   - Publish/Local toggle
-
-2. **Update BookCard**
-   - Add "Upload EPUB" menu item for ghost books
-   - Add "Edit Metadata" menu item for published books
-
-3. **Update SyncStatusButton**
-   - Show book sync stats
-   - Show ghost book count
-
-4. **Update ImportButton**
-   - Trigger BookAnnouncementModal after EPUB processing
-
-### Phase 4: Ghost Book Completion
-
-1. **EPUB upload for ghost books**
-   - File picker in BookCard menu
-   - SHA-256 verification
-   - Error handling for mismatches
-
-2. **Update library page**
-   - Visual distinction for ghost books
-   - Upload prompt on ghost book click
-
 ## Cover Image Processing
 
 ### Cropping & Compression
@@ -407,24 +346,46 @@ async function processCoverImage(
 }
 ```
 
-### Size Estimation
+### SHA-256 Computation
 
-- 128x192 JPEG at quality 0.7 ≈ 5-15KB
-- Base64 encoding adds ~33% overhead
-- Final data URL: ~7-20KB
-- Well within Nostr event size limits (~64KB typical)
+Computed once on EPUB import:
 
-## Conflict Resolution
+```typescript
+async function computeSha256(arrayBuffer: ArrayBuffer): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+```
 
-Same as annotations: **Last Write Wins (LWW)** using `created_at`.
 
-- Book metadata updates replace previous versions
-- Relays keep only latest event per pubkey+kind+d-tag
-- Local changes marked `syncPending` until published
+## Future Roadmap:
 
-## Migration
+| Feature | Status | Description |
+|---------|--------|-------------|
+| EPUB Import | ✅ | Import EPUB files from local filesystem |
+| Book Grid | ✅ | Visual library with cover images and progress bars |
+| Reading Progress | ✅ | Track and display reading progress per book |
+| Delete Books | ✅ | Remove books via context menu |
+| Ghost Books | ✅ | Show synced annotations even without EPUB downloaded |
+| SHA-256 Identity | ✅ | Content-addressable books by file hash |
+| Annotation Publishing | 🚧 | Publish annotations as kind 30078 events |
+| Book Announcements | 🚧 | Publish book metadata as kind 30801 events |
+| Multi-Device Sync | 🚧 | Fetch annotations from relays on login |
+| LWW Conflict Resolution | ✅ | Last Write Wins via `created_at` |
+| Relay Configuration | 🚧 | User-configurable relay list |
 
-No migration needed - new fields are optional and additive.
+- [ ] Browse public annotations by book SHA-256
+- [ ] Discover books through shared annotations
+
+- [ ] Browse public annotations by book SHA-256
+- [ ] Discover books through shared annotations
+- [ ] Follow other readers' annotations
+
+1. **Social discovery**: Browse other users' book announcements
+2. **Book recommendations**: Based on shared annotations
+3. **Reading groups**: Shared book lists with friends
+4. **EPUB sharing**: Optional encrypted EPUB sharing (separate NIP)
 
 ## Security Considerations
 
@@ -432,24 +393,3 @@ No migration needed - new fields are optional and additive.
 2. **SHA-256 verification**: Always verify uploaded EPUBs match expected hash
 3. **Private books**: `isPublic: false` books never publish events
 4. **Relay selection**: Use user's configured relays, not hardcoded
-
-## Future Enhancements
-
-1. **Social discovery**: Browse other users' book announcements
-2. **Book recommendations**: Based on shared annotations
-3. **Reading groups**: Shared book lists with friends
-4. **EPUB sharing**: Optional encrypted EPUB sharing (separate NIP)
-
-
----
-
-## Future Roadmap:
-
-- [ ] Browse public annotations by book SHA-256
-- [ ] Discover books through shared annotations
-
-### Book Discovery
-- [ ] Browse public annotations by book SHA-256
-- [ ] Discover books through shared annotations
-- [ ] Follow other readers' annotations
-

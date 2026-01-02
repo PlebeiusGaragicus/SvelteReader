@@ -1,6 +1,14 @@
 # Spectating Feature
 
-## Overview
+### Spectating
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Browse Others' Libraries | ✅ | Read-only view of another user's books |
+| Spectate History | ✅ | Remember previously viewed users |
+| Relay Customization | ✅ | Specify relays for each spectated user |
+| Visual Indicators | ✅ | Blue tint and badges for spectate mode |
+| Read-Only Enforcement | ✅ | Disable edit actions when spectating |
 
 The **Spectating** feature allows users to browse another Nostr user's library in read-only mode. This enables discovery of books and annotations without requiring the spectated user to be online or take any action. All data is fetched from Nostr relays and stored locally for offline viewing.
 
@@ -19,8 +27,7 @@ The **Spectating** feature allows users to browse another Nostr user's library i
 6. On success: page reloads, user enters spectate mode viewing the target's library
 
 **Previously Viewed Users:**
-- History of up to 10 previously spectated users is persisted to localStorage
-- Users can quickly re-spectate from history with one click
+- History previously spectated users is persisted to localStorage
 - History entries store: pubkey, npub, profile info, relays, lastSynced timestamp
 
 ### 2. Spectate Mode Experience

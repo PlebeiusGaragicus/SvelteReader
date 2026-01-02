@@ -1,6 +1,6 @@
 # What is SvelteReader?
 
-see our [Development Plan](./development-plan.md) for progress.
+Coding agents must ALWAYS read [their instructions](./agent.md).
 
 ---
 
@@ -27,6 +27,10 @@ see our [Development Plan](./development-plan.md) for progress.
 
 
 # Design FAQ
+
+### Why don't you migrate your databases?
+
+We are very early in development and can't be bothered to migrate - that's a feature for a mature product.  We break things and move fast using a "clean slate" approach.  Adapt or die.
 
 ### Why Nostr instead of traditional auth (email/password, OAuth)?
 

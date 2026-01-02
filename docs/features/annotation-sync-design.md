@@ -1,8 +1,5 @@
 # Annotation Sync Design
 
-> Design document for annotation-first sync using Nostr protocol.
-
-## Overview
 
 SvelteReader takes an **annotation-first** approach to sync:
 - Annotations are the primary synced data
@@ -10,7 +7,57 @@ SvelteReader takes an **annotation-first** approach to sync:
 - Users can selectively publish annotations to Nostr relays
 - Annotations can exist without the book downloaded ("ghost books")
 
-## Data Structures
+---
+
+`Nostr Integration` and `Addressable Events`
+
+see [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md)
+
+Annotations use **Addressable Events** rather than regular notes:
+
+| Event Type | Kind Range | Behavior |
+|------------|------------|----------|
+| Regular | 1-9999 | Stored permanently, immutable |
+| Replaceable | 10000-19999 | Latest event per pubkey+kind wins |
+| Ephemeral | 20000-29999 | Not stored |
+| **Addressable** | **30000-39999** | Latest event per pubkey+kind+d-tag wins |
+
+**Why Addressable?**
+- User can **update** an annotation (edit note, change color)
+- User can **delete** by publishing empty/tombstone event
+- Unique identifier: `pubkey + kind + d-tag`
+- Only latest version stored by relays
+
+---
+
+Nostr serves two purposes:
+1. **Social discoverability** — Find annotations from other readers
+2. **Data storage / sync** — Persist and sync user's own annotations across devices
+
+---
+
+`sync flow`:
+
+
+**Publishing:**
+1. User creates/edits annotation locally
+2. If `isPublic` or sync enabled, sign and publish addressable event
+3. Store `nostrEventId` locally for reference
+
+**Fetching (fresh install):**
+1. User logs in with Nostr identity
+2. Query relays: `{"kinds": [30078], "authors": ["<pubkey>"]}`
+3. For each event, parse `d` tag to extract `bookSha256` and `cfiRange`
+4. Create/update local annotations
+5. Create ghost books for unknown `bookSha256` values
+
+**Deletion:**
+1. Publish event with same `d` tag, `content: {"deleted": true}`
+2. Relays replace old event with tombstone
+3. Other clients see deletion on sync
+
+
+## Current Implementation:
 
 ### Book Identity (Publishable)
 
@@ -106,30 +153,7 @@ sveltereader (v2)
     └── index: by-book (bookSha256)
 ```
 
-### SHA-256 Computation
 
-Computed once on EPUB import:
-
-```typescript
-async function computeSha256(arrayBuffer: ArrayBuffer): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-```
-
-## Ghost Books
-
-When annotations exist for a book that isn't downloaded locally:
-
-1. Book appears in library with `hasEpubData: false`
-2. UI shows "Download to read" prompt
-3. User can still view annotation list
-4. Opening the book prompts for EPUB file
-
-This enables:
-- Syncing annotations from another device before downloading books
-- Importing someone else's annotations for a book you'll get later
 
 ## Delete Operations
 
@@ -147,28 +171,6 @@ This enables:
 - Nostr events have native `created_at` field
 - No complex CRDT overhead
 
-## Nostr Integration
-
-Nostr serves two purposes:
-1. **Social discoverability** — Find annotations from other readers
-2. **Data storage / sync** — Persist and sync user's own annotations across devices
-
-### Addressable Events (kind 30000-40000)
-
-Annotations use **Addressable Events** rather than regular notes:
-
-| Event Type | Kind Range | Behavior |
-|------------|------------|----------|
-| Regular | 1-9999 | Stored permanently, immutable |
-| Replaceable | 10000-19999 | Latest event per pubkey+kind wins |
-| Ephemeral | 20000-29999 | Not stored |
-| **Addressable** | **30000-39999** | Latest event per pubkey+kind+d-tag wins |
-
-**Why Addressable?**
-- User can **update** an annotation (edit note, change color)
-- User can **delete** by publishing empty/tombstone event
-- Unique identifier: `pubkey + kind + d-tag`
-- Only latest version stored by relays
 
 ### Annotation Event Structure
 
@@ -198,24 +200,6 @@ interface AnnotationEventContent {
 }
 ```
 
-### Sync Flow
-
-**Publishing:**
-1. User creates/edits annotation locally
-2. If `isPublic` or sync enabled, sign and publish addressable event
-3. Store `nostrEventId` locally for reference
-
-**Fetching (fresh install):**
-1. User logs in with Nostr identity
-2. Query relays: `{"kinds": [30078], "authors": ["<pubkey>"]}`
-3. For each event, parse `d` tag to extract `bookSha256` and `cfiRange`
-4. Create/update local annotations
-5. Create ghost books for unknown `bookSha256` values
-
-**Deletion:**
-1. Publish event with same `d` tag, `content: {"deleted": true}`
-2. Relays replace old event with tombstone
-3. Other clients see deletion on sync
 
 ### Local Annotation Fields for Sync
 
@@ -238,11 +222,6 @@ interface Annotation {
 }
 ```
 
-## Migration
-
-This is a **clean-slate redesign**. No migration from previous localStorage-based annotation storage.
-
----
 
 ## Feature Roadmap:
 
