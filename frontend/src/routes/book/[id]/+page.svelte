@@ -44,7 +44,7 @@
 	let showAIChat = $state(false);
 
 	// Reader state
-	let readerContainer: HTMLDivElement;
+	let readerContainer = $state<HTMLDivElement>();
 	let isLoading = $state(true);
 	let loadError = $state<string | null>(null);
 	let errorCode = $state<string | null>(null);
@@ -842,14 +842,25 @@
 				style="width: {chatPanelWidth}px; background-color: var(--card); color: var(--card-foreground);"
 			>
 				<!-- Resize Handle - wider hit area for easier grabbing -->
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+				<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 				<div 
-					class="group absolute -left-2 inset-y-0 w-4 cursor-col-resize z-20 flex items-center justify-center"
+					class="group absolute -left-2 inset-y-0 w-4 cursor-col-resize z-20 flex items-center justify-center focus:outline-none"
 					onmousedown={(e) => { e.stopPropagation(); startResize(e); }}
 					onclick={(e) => e.stopPropagation()}
+					onkeydown={(e) => {
+						if (e.key === 'ArrowLeft') {
+							chatPanelWidth = Math.min(MAX_PANEL_WIDTH, chatPanelWidth + 20);
+						} else if (e.key === 'ArrowRight') {
+							chatPanelWidth = Math.max(MIN_PANEL_WIDTH, chatPanelWidth - 20);
+						}
+					}}
 					role="separator"
 					aria-orientation="vertical"
 					aria-label="Resize chat panel"
+					aria-valuenow={chatPanelWidth}
+					aria-valuemin={MIN_PANEL_WIDTH}
+					aria-valuemax={MAX_PANEL_WIDTH}
 					tabindex="0"
 				>
 					<!-- Visual indicator - centered within the wider hit area -->

@@ -378,17 +378,22 @@
 
 <!-- Delete Confirmation Modal -->
 {#if showDeleteConfirm}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div 
 		class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
 		onclick={() => showDeleteConfirm = false}
+		onkeydown={(e) => e.key === 'Escape' && (showDeleteConfirm = false)}
+		role="presentation"
 	>
-		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 		<div 
 			class="w-80 rounded-lg border border-border bg-background p-4 shadow-xl"
 			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="delete-annotation-title"
+			tabindex="-1"
 		>
-			<h3 class="text-lg font-semibold mb-2">Delete Annotation?</h3>
+			<h3 id="delete-annotation-title" class="text-lg font-semibold mb-2">Delete Annotation?</h3>
 			<p class="text-sm text-muted-foreground mb-4">
 				This will permanently delete this annotation including any highlights, notes, and chat history.
 			</p>

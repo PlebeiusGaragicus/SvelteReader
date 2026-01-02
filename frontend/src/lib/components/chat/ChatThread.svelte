@@ -48,13 +48,7 @@
 	let backendAvailable = $state<boolean | null>(null);
 	
 	// State machine for chat mode
-	let mode = $state<ChatMode>(
-		initialThreadId 
-			? { type: 'loading-thread', threadId: initialThreadId }
-			: passageContext 
-				? { type: 'new-chat', context: passageContext }
-				: { type: 'history' }
-	);
+	let mode = $state<ChatMode>({ type: 'history' });
 	
 	// Derive view from mode
 	const currentView = $derived<ViewMode>(
@@ -99,8 +93,13 @@
 			backendAvailable = available;
 		});
 
-		// Load threads list
-		chat.loadThreads();
+		// Set the current book context for thread scoping
+		if (bookId) {
+			chat.setBookId(bookId);
+		}
+
+		// Load threads list (filtered by bookId if provided)
+		chat.loadThreads(bookId);
 
 		// Set up refund callback for payment recovery
 		// This allows the chat store to refund tokens via CypherTap on errors
@@ -158,8 +157,8 @@
 	
 	// React to prop changes (e.g., when opening from annotation)
 	// Use JSON comparison for passageContext since it's an object
-	let lastInitialThreadId = $state<string | undefined>(initialThreadId);
-	let lastPassageContextJson = $state<string>(JSON.stringify(passageContext));
+	let lastInitialThreadId = $state<string | undefined>();
+	let lastPassageContextJson = $state<string>('');
 	
 	$effect(() => {
 		// Check if initialThreadId changed

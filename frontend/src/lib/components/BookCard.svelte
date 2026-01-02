@@ -283,17 +283,21 @@
 
 <!-- Upload Error Toast -->
 {#if showUploadError}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 	<div 
 		class="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-destructive bg-destructive/10 px-4 py-3 shadow-lg"
 		onclick={() => showUploadError = null}
+		onkeydown={(e) => e.key === 'Escape' && (showUploadError = null)}
+		role="alert"
+		tabindex="0"
 	>
 		<AlertCircle class="h-5 w-5 text-destructive" />
 		<div>
 			<p class="text-sm font-medium text-destructive">Upload Failed</p>
 			<p class="text-xs text-muted-foreground">{showUploadError}</p>
 		</div>
-		<button onclick={() => showUploadError = null} class="ml-2">
+		<button onclick={() => showUploadError = null} class="ml-2" aria-label="Close error toast">
 			<X class="h-4 w-4" />
 		</button>
 	</div>
@@ -309,18 +313,23 @@
 
 <!-- Delete Confirmation Modal -->
 {#if showDeleteModal}
-	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 	<div 
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
 		onclick={closeModal}
+		onkeydown={(e) => e.key === 'Escape' && closeModal(e as any)}
+		role="presentation"
 	>
-		<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 		<div 
 			class="mx-4 w-full max-w-sm rounded-lg border border-border bg-popover p-4 shadow-xl"
 			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="delete-options-title"
+			tabindex="-1"
 		>
 			<div class="mb-4 flex items-center justify-between">
-				<h3 class="text-lg font-semibold">Delete Options</h3>
+				<h3 id="delete-options-title" class="text-lg font-semibold">Delete Options</h3>
 				<button
 					onclick={closeModal}
 					class="rounded-md p-1 hover:bg-accent"

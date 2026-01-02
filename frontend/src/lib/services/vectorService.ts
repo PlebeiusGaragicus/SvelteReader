@@ -20,6 +20,8 @@ export interface SearchResult {
 	chapter: string;
 	chapterId: string;
 	score: number;
+	startOffset?: number;  // Character offset within chapter
+	endOffset?: number;    // End character offset within chapter
 }
 
 export interface ChapterInput {
@@ -47,6 +49,8 @@ interface ChunkData {
 	chapterTitle: string;
 	text: string;
 	embedding: number[];
+	startOffset: number;  // Character offset within chapter
+	endOffset: number;    // End character offset within chapter
 }
 
 // Embedding model state
@@ -192,20 +196,30 @@ export async function indexBook(
 	const chunks: ChunkData[] = [];
 	
 	// Collect all text chunks first (fast, non-blocking)
-	const allTextChunks: Array<{ text: string; chapterId: string; chapterTitle: string; index: number }> = [];
+	const allTextChunks: Array<{ 
+		text: string; 
+		chapterId: string; 
+		chapterTitle: string; 
+		index: number;
+		startOffset: number;
+		endOffset: number;
+	}> = [];
 	
 	for (const chapter of chapters) {
 		if (!chapter.text || chapter.text.trim().length === 0) {
 			continue;
 		}
 		
-		const textChunks = chunkText(chapter.text, CHUNK_SIZE, CHUNK_OVERLAP);
-		for (let i = 0; i < textChunks.length; i++) {
+		const textChunksWithOffsets = chunkTextWithOffsets(chapter.text, CHUNK_SIZE, CHUNK_OVERLAP);
+		for (let i = 0; i < textChunksWithOffsets.length; i++) {
+			const chunk = textChunksWithOffsets[i];
 			allTextChunks.push({
-				text: textChunks[i],
+				text: chunk.text,
 				chapterId: chapter.id,
 				chapterTitle: chapter.title,
 				index: i,
+				startOffset: chunk.startOffset,
+				endOffset: chunk.endOffset,
 			});
 		}
 	}
@@ -226,6 +240,8 @@ export async function indexBook(
 				chapterTitle: chunk.chapterTitle,
 				text: chunk.text,
 				embedding,
+				startOffset: chunk.startOffset,
+				endOffset: chunk.endOffset,
 			});
 		} catch (error) {
 			console.warn(`[VectorService] Failed to embed chunk ${chunk.index} of ${chunk.chapterId}:`, error);
@@ -289,12 +305,14 @@ export async function search(
 	// Sort by score descending
 	scored.sort((a, b) => b.score - a.score);
 	
-	// Return top K results
+	// Return top K results with position metadata for citations
 	return scored.slice(0, topK).map(({ chunk, score }) => ({
 		text: chunk.text,
 		chapter: chunk.chapterTitle,
 		chapterId: chunk.chapterId,
 		score,
+		startOffset: chunk.startOffset,
+		endOffset: chunk.endOffset,
 	}));
 }
 
@@ -333,15 +351,15 @@ export function getMemoryUsage(): { totalChunks: number; books: number } {
 // =============================================================================
 
 /**
- * Split text into overlapping chunks.
- * Fixed to prevent infinite loops and ensure forward progress.
+ * Split text into overlapping chunks with position tracking.
+ * Returns chunks with their start/end offsets in the original text.
  */
-function chunkText(text: string, size: number, overlap: number): string[] {
+function chunkTextWithOffsets(text: string, size: number, overlap: number): Array<{ text: string; startOffset: number; endOffset: number }> {
 	if (!text || text.length === 0) return [];
-	if (size <= 0) return [text];
+	if (size <= 0) return [{ text, startOffset: 0, endOffset: text.length }];
 	if (overlap >= size) overlap = Math.floor(size / 2); // Prevent overlap >= size
 	
-	const chunks: string[] = [];
+	const chunks: Array<{ text: string; startOffset: number; endOffset: number }> = [];
 	let start = 0;
 	const maxChunks = Math.ceil(text.length / (size - overlap)) + 10; // Safety limit
 	
@@ -372,10 +390,16 @@ function chunkText(text: string, size: number, overlap: number): string[] {
 			}
 		}
 		
-		// Extract and add chunk
-		const chunk = text.slice(start, end).trim();
-		if (chunk.length > 0) {
-			chunks.push(chunk);
+		// Extract and add chunk with offsets
+		const chunkText = text.slice(start, end).trim();
+		if (chunkText.length > 0) {
+			// Find the actual start offset after trimming
+			const trimmedStart = start + (text.slice(start, end).length - text.slice(start, end).trimStart().length);
+			chunks.push({
+				text: chunkText,
+				startOffset: trimmedStart,
+				endOffset: trimmedStart + chunkText.length,
+			});
 		}
 		
 		// Calculate next start position - ensure forward progress

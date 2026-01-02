@@ -115,7 +115,12 @@ export async function submitMessage(
 	
 	// Create thread if needed
 	if (!threadId) {
-		const thread = await client.threads.create();
+		// Include book_id in metadata for thread scoping
+		const metadata: Record<string, unknown> = {};
+		if (options.bookId) {
+			metadata.book_id = options.bookId;
+		}
+		const thread = await client.threads.create({ metadata });
 		threadId = thread.thread_id;
 		callbacks.onThreadId?.(threadId);
 	}
@@ -366,11 +371,23 @@ export async function submitMessage(
 // =============================================================================
 
 /**
- * Get all threads for the current user.
+ * Get threads, optionally filtered by book.
+ * @param bookId - If provided, only returns threads for this book
  */
-export async function getThreads(): Promise<Thread[]> {
+export async function getThreads(bookId?: string): Promise<Thread[]> {
 	const client = getClient();
-	const threads = await client.threads.search();
+	
+	if (bookId) {
+		// Filter threads by book_id metadata
+		const threads = await client.threads.search({
+			metadata: { book_id: bookId },
+			limit: 100,
+		});
+		return threads;
+	}
+	
+	// Return all threads if no filter
+	const threads = await client.threads.search({ limit: 100 });
 	return threads;
 }
 

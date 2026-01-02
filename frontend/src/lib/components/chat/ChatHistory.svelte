@@ -45,8 +45,7 @@
 	}
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="flex h-full flex-col" onclick={(e) => e.stopPropagation()}>
+<div class="flex h-full flex-col" onclick={(e) => e.stopPropagation()} role="presentation">
 	<div class="flex-1 overflow-y-auto p-2">
 		{#if isLoading}
 			<!-- Loading skeleton -->

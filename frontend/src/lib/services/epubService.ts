@@ -1,5 +1,5 @@
-import ePub, { Book, Rendition } from 'epubjs';
-import type { NavItem } from 'epubjs';
+import ePub from 'epubjs';
+import type { Book, Rendition, NavItem } from 'epubjs';
 import { storeLocations, getLocations } from '$lib/services/storageService';
 import type { BookMetadata, TocItem, LocationInfo, Annotation, AnnotationLocal, AnnotationColor } from '$lib/types';
 import { AppError, getAnnotationDisplayColor, annotationHasChat, annotationHasNote } from '$lib/types';
@@ -1245,8 +1245,10 @@ class EpubService {
 				const tocEntry = this.findTocEntryForHref(toc, href);
 				
 				if (text.trim()) {
+					// Use href as the ID since that's what epub.js needs for navigation
+					// This ensures citations work correctly when clicked
 					chapters.push({
-						id: item.idref || item.id || href,
+						id: href,
 						title: tocEntry?.label || this.extractTitleFromHref(href),
 						text: text.trim(),
 						href: href,
@@ -1472,6 +1474,313 @@ class EpubService {
 			.replace(/\.(x?html?|xml)$/i, '')
 			.replace(/[-_]/g, ' ')
 			.replace(/^\d+\s*/, ''); // Remove leading numbers
+	}
+
+	/**
+	 * Navigate to a specific passage in the book and highlight it.
+	 * Used for citation navigation from AI chat responses.
+	 * 
+	 * @param chapterId - The chapter ID (from TOC or search results)
+	 * @param searchText - Text snippet to find and highlight in the chapter
+	 * @returns Object with cfiRange if found, or null if navigation failed
+	 */
+	async navigateToPassage(
+		chapterId: string, 
+		searchText: string
+	): Promise<{ cfiRange: string; chapterTitle: string | null } | null> {
+		if (!this.book || !this.rendition) {
+			console.warn('[EpubService] Cannot navigate: book or rendition not ready');
+			return null;
+		}
+
+		console.log(`[EpubService] navigateToPassage: chapterId="${chapterId}", text="${searchText.slice(0, 50)}..."`);
+
+		try {
+			// Resolve the chapter ID to an href using multiple strategies
+			let targetHref: string | null = null;
+			
+			// Strategy 1: Try resolving via TOC
+			const tocHref = await this.resolveTocIdToHref(chapterId);
+			if (tocHref) {
+				targetHref = tocHref.split('#')[0];
+				console.log(`[EpubService] Resolved via TOC: "${chapterId}" -> "${targetHref}"`);
+			}
+			
+			// Strategy 2: Search spine items directly (like getChapterText does)
+			if (!targetHref) {
+				await this.book.loaded.spine;
+				const spine = this.book.spine as any;
+				const items: any[] = spine?.items || [];
+				
+				// Normalize the chapter ID for matching (handle underscores vs dots, etc.)
+				const normalizeForMatch = (s: string) => s.toLowerCase()
+					.replace(/[_\-]/g, '.') // Treat underscores and hyphens like dots
+					.replace(/\.+/g, '.')   // Collapse multiple dots
+					.replace(/^.*\//, '');  // Remove path prefix
+				
+				const normalizedChapterId = normalizeForMatch(chapterId);
+				
+				for (const item of items) {
+					const itemHref = item?.href || '';
+					const itemFilename = itemHref.split('/').pop() || '';
+					const normalizedItemFilename = normalizeForMatch(itemFilename);
+					
+					// Try various matching strategies
+					if (itemHref === chapterId || 
+						itemHref.endsWith(chapterId) || 
+						chapterId.endsWith(itemHref) ||
+						itemFilename === chapterId.split('/').pop() ||
+						// Normalize and compare (handles ch002_xhtml vs ch002.xhtml)
+						normalizedItemFilename === normalizedChapterId ||
+						normalizedItemFilename.startsWith(normalizedChapterId.replace(/\..*$/, '')) ||
+						// Check if chapterId contains a recognizable part of the filename
+						itemFilename.replace(/\.[^.]+$/, '') === chapterId.replace(/[_.].*$/, '')) {
+						targetHref = itemHref;
+						console.log(`[EpubService] Resolved via spine: "${chapterId}" -> "${targetHref}"`);
+						break;
+					}
+				}
+			}
+			
+			// Strategy 3: Transform underscores to dots and try as path
+			if (!targetHref) {
+				const transformedId = chapterId.replace(/_/g, '.');
+				if (transformedId !== chapterId) {
+					// Try with the transformed ID
+					const spine = this.book.spine as any;
+					const items: any[] = spine?.items || [];
+					for (const item of items) {
+						const itemHref = item?.href || '';
+						if (itemHref.endsWith(transformedId) || 
+							itemHref.split('/').pop() === transformedId) {
+							targetHref = itemHref;
+							console.log(`[EpubService] Resolved via transform: "${chapterId}" -> "${targetHref}"`);
+							break;
+						}
+					}
+				}
+			}
+			
+			// Strategy 4: Use as-is if it looks like a path
+			if (!targetHref && (chapterId.includes('/') || chapterId.includes('.xhtml') || chapterId.includes('.html'))) {
+				targetHref = chapterId;
+				console.log(`[EpubService] Using chapterId as href directly: "${targetHref}"`);
+			}
+			
+			if (!targetHref) {
+				console.warn(`[EpubService] Could not resolve chapter ID: "${chapterId}"`);
+				return null;
+			}
+
+			// Navigate to the chapter
+			await this.rendition.display(targetHref);
+
+			// Wait a moment for rendering to complete
+			await new Promise(resolve => setTimeout(resolve, 300));
+
+			// Get the chapter title from TOC
+			const chapterTitle = this.getChapterTitleById(chapterId);
+
+			// Now search for the text in the rendered content
+			const contents = this.rendition.getContents() as any;
+			if (!contents || contents.length === 0) {
+				console.warn('[EpubService] No contents available after navigation');
+				return { cfiRange: '', chapterTitle };
+			}
+
+			const content = contents[0];
+			const doc = content?.document;
+			if (!doc) {
+				console.warn('[EpubService] No document available in contents');
+				return { cfiRange: '', chapterTitle };
+			}
+
+			// Prepare search text - take first 80 chars for matching
+			const searchFor = searchText.trim().slice(0, 80);
+			
+			// Try to find the text using the browser's native find functionality
+			// This is more reliable than manual text node traversal
+			let range: Range | null = null;
+			
+			// Method 1: Use window.find() if available (works in the iframe context)
+			const contentWindow = content.window;
+			if (contentWindow && typeof contentWindow.find === 'function') {
+				// Clear any existing selection
+				const selection = contentWindow.getSelection();
+				selection?.removeAllRanges();
+				
+				// Try to find the exact text first
+				let found = contentWindow.find(searchFor, false, false, true, false, true, false);
+				
+				// If not found, try with just the first 40 chars
+				if (!found && searchFor.length > 40) {
+					found = contentWindow.find(searchFor.slice(0, 40), false, false, true, false, true, false);
+				}
+				
+				if (found && selection && selection.rangeCount > 0) {
+					range = selection.getRangeAt(0).cloneRange();
+					selection.removeAllRanges();
+					console.log('[EpubService] Found text using window.find()');
+				}
+			}
+			
+			// Method 2: Manual text node search as fallback
+			if (!range) {
+				console.log('[EpubService] Falling back to manual text search');
+				const walker = doc.createTreeWalker(
+					doc.body,
+					NodeFilter.SHOW_TEXT,
+					null
+				);
+
+				// Collect all text with original positions
+				const textNodes: Array<{ node: Text; start: number; text: string }> = [];
+				let accumulatedText = '';
+				let node: Text | null;
+				
+				while ((node = walker.nextNode() as Text | null)) {
+					const nodeText = node.textContent || '';
+					textNodes.push({ node, start: accumulatedText.length, text: nodeText });
+					accumulatedText += nodeText;
+				}
+
+				// Search in original text first (case-insensitive)
+				let searchIndex = accumulatedText.toLowerCase().indexOf(searchFor.toLowerCase());
+				
+				// If not found, try normalized search
+				if (searchIndex === -1) {
+					const normalizedAccumulated = accumulatedText.replace(/\s+/g, ' ');
+					const normalizedSearch = searchFor.replace(/\s+/g, ' ');
+					const normalizedIndex = normalizedAccumulated.toLowerCase().indexOf(normalizedSearch.toLowerCase());
+					
+					if (normalizedIndex !== -1) {
+						// Map normalized position back to original position
+						// by counting characters while tracking whitespace
+						let origPos = 0;
+						let normPos = 0;
+						while (normPos < normalizedIndex && origPos < accumulatedText.length) {
+							if (/\s/.test(accumulatedText[origPos])) {
+								// Skip extra whitespace in original
+								origPos++;
+								if (origPos < accumulatedText.length && !/\s/.test(accumulatedText[origPos])) {
+									normPos++; // Count the normalized single space
+								}
+							} else {
+								origPos++;
+								normPos++;
+							}
+						}
+						searchIndex = origPos;
+					}
+				}
+
+				if (searchIndex === -1) {
+					console.log('[EpubService] Text not found in chapter, navigated to chapter start');
+					return { cfiRange: '', chapterTitle };
+				}
+
+				// Find which text node contains the start
+				let foundNode: Text | null = null;
+				let foundOffset = 0;
+				let foundEndNode: Text | null = null;
+				let foundEndOffset = 0;
+				const searchEndIndex = searchIndex + searchFor.length;
+				
+				for (const { node: textNode, start, text } of textNodes) {
+					const nodeEnd = start + text.length;
+					
+					// Find start node
+					if (!foundNode && searchIndex >= start && searchIndex < nodeEnd) {
+						foundNode = textNode;
+						foundOffset = searchIndex - start;
+					}
+					
+					// Find end node
+					if (foundNode && searchEndIndex >= start && searchEndIndex <= nodeEnd) {
+						foundEndNode = textNode;
+						foundEndOffset = searchEndIndex - start;
+						break;
+					} else if (foundNode && searchEndIndex < nodeEnd) {
+						// End is in this node
+						foundEndNode = textNode;
+						foundEndOffset = Math.min(searchEndIndex - start, text.length);
+						break;
+					}
+				}
+
+				if (foundNode) {
+					const newRange = doc.createRange();
+					newRange.setStart(foundNode, Math.min(foundOffset, foundNode.textContent?.length || 0));
+					if (foundEndNode) {
+						newRange.setEnd(foundEndNode, Math.min(foundEndOffset, foundEndNode.textContent?.length || 0));
+					} else {
+						newRange.setEnd(foundNode, Math.min(foundOffset + searchFor.length, foundNode.textContent?.length || 0));
+					}
+					range = newRange;
+				}
+			}
+
+			if (!range) {
+				console.log('[EpubService] Could not create range for text');
+				return { cfiRange: '', chapterTitle };
+			}
+
+			// Try to create a CFI for this position
+			try {
+				const section = (this.book.spine as any).get(targetHref);
+				if (section) {
+					// Generate CFI from the range
+					const cfi = section.cfiFromRange(range);
+					if (cfi) {
+						console.log(`[EpubService] Found passage, navigating to CFI: ${cfi}`);
+						
+						// Navigate to the CFI location (this scrolls to the passage)
+						await this.rendition.display(cfi);
+						
+						// Add a temporary highlight after navigation
+						setTimeout(() => {
+							try {
+								this.rendition?.annotations.highlight(cfi, {}, undefined, 'citation-highlight');
+								
+								// Remove highlight after 5 seconds
+								setTimeout(() => {
+									try {
+										this.rendition?.annotations.remove(cfi, 'highlight');
+									} catch (e) {
+										// Ignore cleanup errors
+									}
+								}, 5000);
+							} catch (e) {
+								console.warn('[EpubService] Failed to add citation highlight:', e);
+							}
+						}, 100);
+
+						return { cfiRange: cfi, chapterTitle };
+					}
+				}
+			} catch (cfiError) {
+				console.warn('[EpubService] Failed to create CFI:', cfiError);
+			}
+
+			// Fallback: scroll the found text into view using the range we created
+			try {
+				const selection = content.window.getSelection();
+				selection?.removeAllRanges();
+				selection?.addRange(range);
+				const startContainer = range.startContainer;
+				const parentEl = startContainer.parentElement;
+				if (parentEl) {
+					parentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				}
+			} catch (scrollError) {
+				console.warn('[EpubService] Failed to scroll to text:', scrollError);
+			}
+
+			return { cfiRange: '', chapterTitle };
+		} catch (error) {
+			console.error('[EpubService] navigateToPassage error:', error);
+			return null;
+		}
 	}
 
 	destroy(): void {
