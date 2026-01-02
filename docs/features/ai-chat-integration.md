@@ -1,5 +1,26 @@
 # AI Chat Integration
 
+### AI Chat
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Streaming Responses | ✅ | SSE streaming from LangGraph agent |
+| Passage Context | ✅ | AI receives highlighted text, notes, book/chapter info |
+| Thread Management | ✅ | Create, retrieve, delete conversation threads |
+| Markdown Rendering | ✅ | Rich formatting in AI responses |
+| OpenAI-Compatible | ✅ | Works with Ollama, vLLM, LM Studio, etc. |
+| Thread History | ✅ | Sidebar with previous conversations |
+
+### Authentication & Payments (CypherTap)
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Nostr Login | ✅ | Authenticate via nostr public key (npub) |
+| Ecash Wallet | ✅ | Client-side Cashu ecash wallet |
+| Pay-per-Message | ✅ | Ecash token attached to each AI request |
+| Refund Safety | ✅ | Client self-redeems on failure |
+| Lightning Deposit | ✅ | Fund wallet via Lightning invoice |
+
 This document describes the architecture and setup for the AI-powered chat feature in SvelteReader.
 
 ## Architecture

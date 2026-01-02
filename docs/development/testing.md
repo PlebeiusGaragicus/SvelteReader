@@ -155,3 +155,14 @@ test.beforeEach(async ({ page }) => {
 - E2E screenshots saved on failure in `test-results/`
 - Keep tests independent—don't rely on order
 - E2E import tests run with `--workers=1` to avoid conflicts
+
+---
+
+## TODO
+
+- [ ] Add E2E tests for annotation create/edit/delete flow
+- [ ] Add E2E tests for ghost book scenarios
+- [ ] Add unit tests for edge cases in stores
+
+- [ ] Update README with new architecture overview
+- [ ] Add developer setup guide

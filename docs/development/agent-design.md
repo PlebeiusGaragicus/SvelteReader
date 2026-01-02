@@ -1,3 +1,42 @@
+
+## Agent Architecture
+
+### LangGraph State Machine
+
+```
+┌─────────────────┐
+│     START       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐
+│ validate_payment│────▶│      END        │ (if payment invalid)
+└────────┬────────┘     └─────────────────┘
+         │ (if valid)
+         ▼
+┌─────────────────┐
+│     chat        │ → Invoke LLM with context
+└────────┬────────┘
+         │
+         ▼ (on success: redeem token)
+┌─────────────────┐
+│      END        │
+└─────────────────┘
+```
+
+### Agent State
+
+```python
+class AgentState(TypedDict):
+    messages: list[BaseMessage]      # Conversation history
+    passage_context: PassageContext  # Book/chapter/highlighted text
+    payment: PaymentInfo             # Ecash token from client
+    payment_validated: bool          # Token checked
+    payment_token: str               # Token to redeem on success
+    refund: bool                     # Signal client to self-recover
+```
+
+
 # Agent-Driven RAG Architecture
 
 This document describes the client-side RAG (Retrieval Augmented Generation) architecture where the LangGraph agent drives book retrieval through tool calls executed in the browser.

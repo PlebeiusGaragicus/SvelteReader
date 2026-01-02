@@ -1,26 +1,5 @@
 # Setup Guide
 
-Complete instructions for setting up SvelteReader for development.
-
-## Prerequisites
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Node.js | 20+ | Frontend runtime |
-| pnpm | 8+ | Package manager (or npm) |
-| Python | 3.12+ | Backend runtime |
-| Git | 2.30+ | Version control + submodules |
-
-### Optional (for AI features)
-
-| Tool | Purpose |
-|------|---------|
-| Ollama | Local LLM inference |
-| Docker | Run LangGraph in container |
-
----
-
-## Quick Start
 
 ### 1. Clone with Submodules
 
@@ -114,64 +93,6 @@ MINT_URL=https://mint.minibits.cash/Bitcoin
 VITE_API_URL=http://localhost:8000
 ```
 
----
-
-## LLM Provider Setup
-
-### Option A: Ollama (Recommended for Local Development)
-
-1. Install Ollama: https://ollama.ai
-
-2. Pull a model:
-   ```bash
-   ollama pull llama3.2
-   ```
-
-3. Ollama runs automatically on `http://localhost:11434`
-
-4. Agent `.env`:
-   ```bash
-   LLM_BASE_URL=http://localhost:11434/v1
-   LLM_API_KEY=ollama
-   LLM_MODEL=llama3.2
-   ```
-
-### Option B: OpenRouter (Cloud, Multiple Models)
-
-1. Get API key: https://openrouter.ai
-
-2. Agent `.env`:
-   ```bash
-   LLM_BASE_URL=https://openrouter.ai/api/v1
-   LLM_API_KEY=sk-or-v1-...
-   LLM_MODEL=anthropic/claude-3.5-sonnet
-   ```
-
-### Option C: LM Studio (Desktop App)
-
-1. Install LM Studio: https://lmstudio.ai
-
-2. Download a model and start the server
-
-3. Agent `.env`:
-   ```bash
-   LLM_BASE_URL=http://localhost:1234/v1
-   LLM_API_KEY=lm-studio
-   LLM_MODEL=local-model
-   ```
-
-### Option D: vLLM (Self-Hosted GPU Server)
-
-1. Run vLLM server with your model
-
-2. Agent `.env`:
-   ```bash
-   LLM_BASE_URL=http://your-gpu-server:8000/v1
-   LLM_API_KEY=your-key
-   LLM_MODEL=meta-llama/Llama-3.2-8B-Instruct
-   ```
-
----
 
 ## CypherTap Submodule
 
@@ -198,20 +119,6 @@ pnpm build
 The frontend links to CypherTap via `"cyphertap": "file:../cyphertap"` in package.json.
 
 ---
-
-## Virtual Environments
-
-### Using Existing Virtual Environments
-
-The repo includes pre-created virtual environments:
-
-```bash
-# Agent
-source agent_venv/bin/activate
-
-# Backend  
-source backend_venv/bin/activate
-```
 
 ### Creating Fresh Virtual Environments
 
@@ -258,21 +165,6 @@ cd backend
 pip install -e ".[dev]"
 pytest
 ```
-
----
-
-## Development Workflow
-
-### 1. Reader-Only Development
-
-If working on reader features (not AI):
-
-```bash
-cd frontend
-pnpm dev
-```
-
-No backend needed. Import EPUBs and test reading features.
 
 ### 2. Full-Stack Development
 
@@ -334,34 +226,152 @@ curl http://localhost:8000/health
 # Should return: {"status":"healthy"}
 ```
 
-### "epub.js" errors or blank reader
+---
 
-Make sure you're importing a valid EPUB file. Some DRM-protected EPUBs won't work.
+# Deployment
 
-### IndexedDB quota errors
+IMPORTANT: this web app is still a work-in-progress and is NOT ready to be deployed.
 
-Browser storage limit reached. Clear site data or use a different browser profile.
+EVERYTHING BELOW IS A WORK IN PROGRESS and should be ignored for now.
+
+## Getting Started
+
+```bash
+# Clone with CypherTap submodule
+git clone --recursive https://github.com/yourorg/SvelteReader.git
+cd SvelteReader
+
+# Start frontend (reader features only)
+cd frontend
+pnpm install
+pnpm dev
+```
+
+Open http://localhost:5173 and import an EPUB to start reading.
+
+For AI features, see the full [Setup Guide](setup.md).
 
 ---
 
-## Ports Summary
+## Deployment
 
-| Service | Port | URL |
-|---------|------|-----|
-| Frontend | 5173 | http://localhost:5173 |
-| Backend | 8000 | http://localhost:8000 |
-| Agent | 2024 | http://localhost:2024 |
-| Ollama | 11434 | http://localhost:11434 |
+This app is **100% client-side** and can be hosted on any static file server.  See [Deployment](./deployment.md)
 
----
 
-## Next Steps
 
-1. **Import an EPUB** - Test the reader
-2. **Create annotations** - Highlight and add notes
-3. **Try AI chat** - Ask questions about passages
-4. **Connect CypherTap** - Login with Nostr key
-5. **Add ecash** - Fund wallet for AI features
 
-See [Features](features.md) for a complete feature list.
 
+
+## Static Hosting Compatibility
+
+This app is **100% client-side** and can be hosted on any static file server:
+
+- GitHub Pages
+- Netlify
+- Vercel (static)
+- Cloudflare Pages
+- Any HTTP file server
+
+**No server-side code exists.**
+
+## Code Analysis
+
+### Route Files (all client-side)
+
+| File | Purpose |
+|------|---------|
+| `src/routes/+layout.svelte` | App shell (TopBar, theme, toasts) |
+| `src/routes/+page.svelte` | Library view (book grid) |
+| `src/routes/book/[id]/+page.svelte` | Reader view |
+| `src/routes/book/[id]/+page.ts` | Disables SSR |
+
+**No server files:**
+
+- ❌ No `+page.server.ts` (server-side data loading)
+- ❌ No `+server.ts` (API endpoints)
+- ❌ No `+layout.server.ts` (server-side layout data)
+
+### Data Storage (browser only)
+
+| Service | Storage | Server Needed? |
+|---------|---------|----------------|
+| Book metadata | localStorage | No |
+| EPUB binaries | IndexedDB | No |
+| Location cache | IndexedDB | No |
+| EPUB rendering | epub.js iframe | No |
+| Auth (CypherTap) | Nostr keys in browser | No |
+
+## Current Adapter
+
+```javascript
+// svelte.config.js
+import adapter from '@sveltejs/adapter-auto';
+```
+
+`adapter-auto` detects the deployment platform automatically. Works for Vercel, Netlify, Cloudflare, etc.
+
+## Static Adapter (for GitHub Pages)
+
+To deploy to a pure static host like GitHub Pages:
+
+### 1. Install adapter-static
+
+```bash
+npm install -D @sveltejs/adapter-static
+```
+
+### 2. Update svelte.config.js
+
+```javascript
+import adapter from '@sveltejs/adapter-static';
+
+const config = {
+  kit: {
+    adapter: adapter({
+      pages: 'build',
+      assets: 'build',
+      fallback: 'index.html'  // SPA fallback for client-side routing
+    })
+  }
+};
+
+export default config;
+```
+
+### 3. Build
+
+```bash
+npm run build
+```
+
+Output goes to `build/` folder.
+
+### 4. Deploy
+
+Upload `build/` contents to your static host.
+
+For GitHub Pages, you can use the `gh-pages` branch or GitHub Actions.
+
+## SPA Fallback
+
+The `fallback: 'index.html'` setting is critical. It ensures that direct navigation to `/book/abc123` works by serving `index.html` and letting the client-side router handle the path.
+
+Without this, refreshing on a deep link would return 404.
+
+## Environment Considerations
+
+### CypherTap
+
+CypherTap connects to:
+- Nostr relays (WebSocket from browser)
+- Cashu mints (HTTP from browser)
+
+These are client-side network calls, not server dependencies.
+
+### Future Backend
+
+If pay-per-use AI features are added (per the project requirements), a backend server would be needed. At that point, consider:
+
+- Separate API server
+- Serverless functions (Vercel/Netlify functions)
+- Keep frontend static, API separate

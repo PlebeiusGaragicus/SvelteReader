@@ -241,3 +241,57 @@ interface Annotation {
 ## Migration
 
 This is a **clean-slate redesign**. No migration from previous localStorage-based annotation storage.
+
+---
+
+## Feature Roadmap:
+
+- [ ] Queue sync operations when offline
+- [ ] Sync pending changes on reconnect
+
+- [ ] Search annotations by text/note content
+- [ ] Filter annotations by color, book, date
+- [ ] Export annotations as Markdown/JSON/HTML
+
+### Deletion Sync
+- [ ] Publish tombstone events (`{"deleted": true}`)
+- [ ] Handle incoming tombstone events
+- [ ] Clean up local annotations on tombstone receipt
+
+### Annotation Syncing
+- [ ] Query relays for user's annotations on login
+- [ ] Parse `d` tag to extract `bookSha256:cfiRange`
+- [ ] Create/update local annotations from events
+- [ ] Create ghost books for unknown `bookSha256` values
+- [ ] Handle LWW conflict resolution via `created_at`
+
+### Annotation Management
+- [ ] Search annotations by text/note content
+- [ ] Filter annotations by color, book, date
+- [ ] Sort annotations by various criteria
+- [ ] Bulk operations (delete, export, publish)
+
+### Export & Sharing
+- [ ] Export annotations as Markdown
+- [ ] Export annotations as JSON
+- [ ] Generate shareable annotation links
+- [ ] Import annotations from JSON
+
+### Relay Management
+- [ ] Add relay configuration UI
+- [ ] Support multiple relays with hints
+- [ ] Handle relay failures gracefully
+
+### Annotation Publishing
+- [ ] Implement kind 30078 addressable event creation
+- [ ] Sign events with user's private key
+- [ ] Publish to configured relays
+- [ ] Store `nostrEventId` and `relays` after publish
+- [ ] Add per-annotation publish toggle in UI
+
+
+## Technical Debt
+
+- [ ] Consolidate error handling patterns
+- [ ] Add comprehensive logging for debugging
+- [ ] Performance optimization for large annotation sets

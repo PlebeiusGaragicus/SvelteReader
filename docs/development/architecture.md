@@ -2,6 +2,23 @@
 
 SvelteReader is a three-tier application: a Svelte frontend, FastAPI backend, and LangGraph AI agent.
 
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | SvelteKit 2 + Svelte 5, TailwindCSS 4 |
+| Styling | TailwindCSS 4 |
+| UI Components | bits-ui, vaul-svelte |\
+| EPUB Rendering | epub.js |
+| Client Storage | IndexedDB (books) + localStorage (state) |
+| Auth/Wallet | CypherTap (Nostr + Cashu) |
+| Nostr/eCash | CypherTap component |
+| Backend | FastAPI (Python 3.12+) |
+| AI Agent | LangGraph + `deepagents`|
+| AI Agent | LangGraph + LangChain |
+| Testing | Vitest (unit) + Playwright (E2E) |
+
+
 ## System Overview
 
 ```
@@ -129,42 +146,6 @@ backend/src/
 | `/api/wallet/balance` | GET | Get wallet balance |
 | `/health` | GET | Health check |
 
-## Agent Architecture
-
-### LangGraph State Machine
-
-```
-┌─────────────────┐
-│     START       │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌─────────────────┐
-│ validate_payment│────▶│      END        │ (if payment invalid)
-└────────┬────────┘     └─────────────────┘
-         │ (if valid)
-         ▼
-┌─────────────────┐
-│     chat        │ → Invoke LLM with context
-└────────┬────────┘
-         │
-         ▼ (on success: redeem token)
-┌─────────────────┐
-│      END        │
-└─────────────────┘
-```
-
-### Agent State
-
-```python
-class AgentState(TypedDict):
-    messages: list[BaseMessage]      # Conversation history
-    passage_context: PassageContext  # Book/chapter/highlighted text
-    payment: PaymentInfo             # Ecash token from client
-    payment_validated: bool          # Token checked
-    payment_token: str               # Token to redeem on success
-    refund: bool                     # Signal client to self-recover
-```
 
 ## Key Design Patterns
 
@@ -215,8 +196,7 @@ For ecash operations:
 - NUT-07 state checking
 
 ### LLM Providers
-Any OpenAI-compatible endpoint:
-- Ollama (local)
-- vLLM (self-hosted)
-- LM Studio (desktop)
-- OpenRouter, Together AI, etc.
+
+ONLY OpenAI-compatible endpoints for local development
+
+May transition to paid APIs in production

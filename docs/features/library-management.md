@@ -1,3 +1,35 @@
+### Library Management
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| EPUB Import | ✅ | Import EPUB files from local filesystem |
+| Book Grid | ✅ | Visual library with cover images and progress bars |
+| Reading Progress | ✅ | Track and display reading progress per book |
+| Delete Books | ✅ | Remove books via context menu |
+| Ghost Books | ✅ | Show synced annotations even without EPUB downloaded |
+| SHA-256 Identity | ✅ | Content-addressable books by file hash |
+
+### Sync (Nostr Protocol)
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Annotation Publishing | 🚧 | Publish annotations as kind 30078 events |
+| Book Announcements | 🚧 | Publish book metadata as kind 30801 events |
+| Multi-Device Sync | 🚧 | Fetch annotations from relays on login |
+| LWW Conflict Resolution | ✅ | Last Write Wins via `created_at` |
+| Relay Configuration | 🚧 | User-configurable relay list |
+
+### Spectating
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Browse Others' Libraries | ✅ | Read-only view of another user's books |
+| Spectate History | ✅ | Remember previously viewed users |
+| Relay Customization | ✅ | Specify relays for each spectated user |
+| Visual Indicators | ✅ | Blue tint and badges for spectate mode |
+| Read-Only Enforcement | ✅ | Disable edit actions when spectating |
+
+
 # Book Sync Design
 
 > Design document for Nostr-based book announcements and sync.
@@ -407,3 +439,17 @@ No migration needed - new fields are optional and additive.
 2. **Book recommendations**: Based on shared annotations
 3. **Reading groups**: Shared book lists with friends
 4. **EPUB sharing**: Optional encrypted EPUB sharing (separate NIP)
+
+
+---
+
+## Future Roadmap:
+
+- [ ] Browse public annotations by book SHA-256
+- [ ] Discover books through shared annotations
+
+### Book Discovery
+- [ ] Browse public annotations by book SHA-256
+- [ ] Discover books through shared annotations
+- [ ] Follow other readers' annotations
+
