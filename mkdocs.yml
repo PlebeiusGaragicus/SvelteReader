@@ -45,9 +45,8 @@ nav:
     - Library Management: features/library-management.md
     - Annotation Sync: features/annotation-sync-design.md
     - AI Chat Integration: features/ai-chat-integration.md
+    - Agent Design: features/agent-design.md
     - Ecash Payment Flow: features/ecash-payment-flow.md
     - Spectating: features/spectating.md
-  - Development:
-    - Agent Design: development/agent-design.md
-    - Architecture: development/architecture.md
-    - Testing: development/testing.md
+    - Architecture: features/architecture.md
+    - Testing: features/testing.md
