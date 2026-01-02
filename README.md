@@ -12,7 +12,7 @@
 
   - **`docs/`** - our MKDocs documentation hosted on Github Pages
   - **`frontend/`** - Svelte 5 web app
-  - **`backend/`** - FastAPI backend for accepting payments - used by our LangGraph agents for payment validation
+  - **`backend/`** - FastAPI backend for accepting payments - used by our LangGraph agents for payment validation and redemption
   - **`agent/`** - Self-hosted LangGraph agents for AI chat
 
   - **`cyphertap`** is our fork of the repository since its `npm` library is out-of-date.  We build from and use our local submodule since it has new features not included in the origional repository. **Changes may be made to this submodule in order to further bugfix/develop its features!**
