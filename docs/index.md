@@ -1,6 +1,6 @@
 # What is SvelteReader?
 
-Coding agents must ALWAYS read [their instructions](../README.md).
+⚠️ Coding agents must ALWAYS read [their instructions](../README.md).
 
 ---
 
