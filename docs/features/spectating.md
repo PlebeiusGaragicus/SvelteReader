@@ -135,8 +135,8 @@ nostrService.fetchRemoteUserData(pubkey, relays)
     │ Connects to relays via nostr-tools   │
     │ Subscribes to:                        │
     │   - kind 0 (profile)                  │
-    │   - kind 30250 (books)                │
-    │   - kind 30251 (annotations)          │
+    │   - kind 30801 (books)                │
+    │   - kind 30800 (annotations)          │
     │ Processes events with LWW merge       │
     └───────────────────────────────────────┘
         ↓
@@ -254,34 +254,32 @@ epubService.onTextSelected((selection) => {
 | Kind | Purpose | NIP |
 |------|---------|-----|
 | 0 | User profile metadata | NIP-01 |
-| 30250 | Book metadata (parameterized replaceable) | Custom |
-| 30251 | Annotation (parameterized replaceable) | Custom |
+| 30801 | Book metadata (parameterized replaceable) | Custom |
+| 30800 | Annotation (parameterized replaceable) | Custom |
 
-**Book Event (kind 30250):**
+**Book Event (kind 30801):**
 ```json
 {
-  "kind": 30250,
+  "kind": 30801,
   "tags": [
-    ["d", "<book-id>"],
+    ["d", "<sha256>"],
     ["title", "Book Title"],
     ["author", "Author Name"],
-    ["sha256", "<epub-hash>"],
-    ["i", "isbn:<isbn>"]
+    ["image", "data:image/jpeg;base64,..."]
   ],
-  "content": "<optional cover base64>"
+  "content": ""
 }
 ```
 
-**Annotation Event (kind 30251):**
+**Annotation Event (kind 30800):**
 ```json
 {
-  "kind": 30251,
+  "kind": 30800,
   "tags": [
-    ["d", "<annotation-id>"],
-    ["a", "30250:<pubkey>:<book-id>"],
-    ["book", "<book-sha256>"]
+    ["d", "<book-sha256>:<cfi-range>"],
+    ["a", "30801:<pubkey>:<book-sha256>"]
   ],
-  "content": "{\"cfiRange\":\"...\",\"selectedText\":\"...\",\"note\":\"...\",\"color\":\"...\"}"
+  "content": "{\"text\":\"selected text\",\"note\":\"user note\"}"
 }
 ```
 

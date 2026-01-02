@@ -46,7 +46,7 @@ Nostr serves two purposes:
 
 **Fetching (fresh install):**
 1. User logs in with Nostr identity
-2. Query relays: `{"kinds": [30078], "authors": ["<pubkey>"]}`
+2. Query relays: `{"kinds": [30800], "authors": ["<pubkey>"]}`
 3. For each event, parse `d` tag to extract `bookSha256` and `cfiRange`
 4. Create/update local annotations
 5. Create ghost books for unknown `bookSha256` values
@@ -176,11 +176,12 @@ sveltereader (v2)
 
 ```json
 {
-  "kind": 30078,                    // Custom addressable kind for annotations
+  "kind": 30800,                    // Addressable kind for annotations
   "pubkey": "<user-pubkey>",
   "created_at": 1703100000,
   "tags": [
     ["d", "<book-sha256>:<cfi-range>"],  // Composite unique identifier
+    ["a", "30801:<pubkey>:<book-sha256>", "wss://relay.example"], // Reference to book
     ["color", "yellow"],                  // Optional: highlight color
     ["r", "wss://relay1.example"],        // Relay hints
     ["r", "wss://relay2.example"]
@@ -262,7 +263,7 @@ interface Annotation {
 - [ ] Handle relay failures gracefully
 
 ### Annotation Publishing
-- [ ] Implement kind 30078 addressable event creation
+- [ ] Implement kind 30800 addressable event creation
 - [ ] Sign events with user's private key
 - [ ] Publish to configured relays
 - [ ] Store `nostrEventId` and `relays` after publish

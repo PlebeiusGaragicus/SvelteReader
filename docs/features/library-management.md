@@ -369,7 +369,7 @@ async function computeSha256(arrayBuffer: ArrayBuffer): Promise<string> {
 | Delete Books | ✅ | Remove books via context menu |
 | Ghost Books | ✅ | Show synced annotations even without EPUB downloaded |
 | SHA-256 Identity | ✅ | Content-addressable books by file hash |
-| Annotation Publishing | 🚧 | Publish annotations as kind 30078 events |
+| Annotation Publishing | 🚧 | Publish annotations as kind 30800 events |
 | Book Announcements | 🚧 | Publish book metadata as kind 30801 events |
 | Multi-Device Sync | 🚧 | Fetch annotations from relays on login |
 | LWW Conflict Resolution | ✅ | Last Write Wins via `created_at` |
