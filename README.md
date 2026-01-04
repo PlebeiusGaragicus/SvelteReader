@@ -27,6 +27,12 @@
 
   - **`fullstack-chat-client`** is an example React frontend for demonstrating a chat UI between a user and LangGraph agent capable of tool calling.
 
+  - **`nips`** contain the *Nostr Implementation Possibilities* which attempt to specify the nostr protocol and are a great reference to guide our own implementation
+
+  - **`chat-langchain`** contains a "production" example of a working reserach/reference agentic frontend using LangGraph Cloud
+
+  - **`perplexica`** contains an example Perplexity-clone which includes a simple web-search and AI-enhanced article aggregator
+
 ### `git clone`
 
 NOTE: these 'reference repositories' may be cloned in the references/ directory so that they're available for review
@@ -45,6 +51,15 @@ git clone https://github.com/langchain-ai/deep-agents-ui
 
 ### nutshell
 git clone https://github.com/cashubtc/nutshell
+
+### nips
+git clone https://github.com/nostr-protocol/nips.git
+
+### chat-langchain
+git clone https://github.com/langchain-ai/chat-langchain.git
+
+### perplexica
+git clone https://github.com/ItzCrazyKns/Perplexica.git
 ```
 
 
