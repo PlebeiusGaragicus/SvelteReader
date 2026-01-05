@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.routers import wallet, search
+from src.routers import wallet, search, suggestions
 from src.services.wallet import initialize_wallet
 from src.services.search import cleanup_clients
 
@@ -49,6 +49,7 @@ app.add_middleware(
 # Include routers
 app.include_router(wallet.router, prefix="/api/wallet", tags=["wallet"])
 app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(suggestions.router, prefix="/api", tags=["suggestions"])
 
 
 @app.on_event("startup")

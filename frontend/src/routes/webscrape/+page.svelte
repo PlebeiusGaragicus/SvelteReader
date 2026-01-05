@@ -6,21 +6,13 @@
 	import { modeStore } from '$lib/stores/mode.svelte';
 	import { walletStore } from '$lib/stores/wallet.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { WebSearchInput, DiscoveryFeed, WebSearchChat } from '$lib/components/webscrape';
+	import { webSearchHistoryStore, type LangGraphMessage, type SearchSource } from '$lib/stores/webSearchHistory.svelte';
+	import { WebSearchInput, DiscoveryFeed, WebSearchChat, ChatSidebar, RelatedQuestions } from '$lib/components/webscrape';
 	import type { PaymentInfo } from '$lib/types/chat';
 
 	// =============================================================================
 	// TYPES
 	// =============================================================================
-
-	interface LangGraphMessage {
-		type: 'human' | 'ai' | 'tool';
-		content: string | unknown[];
-		id?: string;
-		name?: string;
-		tool_call_id?: string;
-		tool_calls?: Array<{ id: string; name: string; args?: Record<string, unknown> }>;
-	}
 
 	interface ToolCallWithStatus {
 		id: string;
@@ -35,7 +27,7 @@
 		role: 'user' | 'assistant';
 		content: string;
 		toolCalls?: ToolCallWithStatus[];
-		sources?: Array<{ index: number; title: string; url: string; snippet?: string }>;
+		sources?: SearchSource[];
 		isStreaming?: boolean;
 	}
 
@@ -50,6 +42,10 @@
 	let threadId = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let messagesContainer = $state<HTMLDivElement | null>(null);
+	let sidebarCollapsed = $state(false);
+	let suggestions = $state<string[]>([]);
+	let loadingSuggestions = $state(false);
+	let isLoadingThread = $state(false); // Prevents save loop when loading a thread
 	
 	const isLoggedIn = $derived(cyphertap.isLoggedIn);
 
@@ -119,7 +115,7 @@
 			const content = extractStringContent(data.message);
 			
 			// Extract sources from content if present
-			let sources: ProcessedMessage['sources'] = [];
+			let sources: SearchSource[] = [];
 			if (data.message.type === 'ai' && content) {
 				const sourcesMatch = content.match(/\*\*Sources:\*\*[\s\S]*$/);
 				if (sourcesMatch) {
@@ -166,6 +162,17 @@
 		return true;
 	});
 
+	// Extract sources from processed messages for the current thread
+	const currentSources = $derived.by((): SearchSource[] => {
+		const allSources: SearchSource[] = [];
+		for (const msg of processedMessages) {
+			if (msg.sources) {
+				allSources.push(...msg.sources);
+			}
+		}
+		return allSources;
+	});
+
 	// =============================================================================
 	// HELPERS
 	// =============================================================================
@@ -200,6 +207,9 @@
 			isLoggedIn: cyphertap.isLoggedIn,
 			npub: cyphertap.npub,
 		});
+		
+		// Initialize history store
+		webSearchHistoryStore.initialize();
 	});
 
 	// Keep wallet synced
@@ -224,6 +234,79 @@
 		});
 	});
 
+	// Save thread to history when messages update (but not when loading a thread)
+	$effect(() => {
+		if (threadId && langGraphMessages.length > 0 && !isStreaming && !isLoadingThread) {
+			webSearchHistoryStore.saveThread(
+				threadId,
+				langGraphMessages,
+				currentSources,
+				suggestions
+			);
+		}
+	});
+
+	// =============================================================================
+	// SUGGESTIONS GENERATION
+	// =============================================================================
+
+	async function generateSuggestions() {
+		if (langGraphMessages.length < 2) {
+			loadingSuggestions = false;
+			return;
+		}
+		
+		loadingSuggestions = true;
+		suggestions = []; // Clear previous suggestions
+		
+		try {
+			const backendUrl = settingsStore.backendUrl;
+			
+			// Build chat history for suggestions
+			const history: [string, string][] = [];
+			for (const msg of langGraphMessages) {
+				if (msg.type === 'human') {
+					const content = extractStringContent(msg);
+					if (content) history.push(['human', content]);
+				} else if (msg.type === 'ai') {
+					const content = extractStringContent(msg);
+					if (content && !msg.tool_calls?.length) history.push(['assistant', content]);
+				}
+			}
+			
+			if (history.length < 2) {
+				console.log('[WebSearch] Not enough history for suggestions');
+				loadingSuggestions = false;
+				return;
+			}
+			
+			console.log('[WebSearch] Generating suggestions from', history.length, 'messages');
+			
+			const response = await fetch(`${backendUrl}/api/suggestions`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ history }),
+			});
+			
+			if (response.ok) {
+				const data = await response.json();
+				suggestions = data.suggestions || [];
+				console.log('[WebSearch] Generated', suggestions.length, 'suggestions');
+				
+				// Save to thread
+				if (threadId && suggestions.length > 0) {
+					webSearchHistoryStore.updateSuggestions(threadId, suggestions);
+				}
+			} else {
+				console.warn('[WebSearch] Suggestions endpoint returned', response.status);
+			}
+		} catch (e) {
+			console.warn('[WebSearch] Failed to generate suggestions:', e);
+		} finally {
+			loadingSuggestions = false;
+		}
+	}
+
 	// =============================================================================
 	// SEARCH HANDLER
 	// =============================================================================
@@ -235,6 +318,7 @@
 		isStreaming = true;
 		streamingContent = '';
 		currentPhase = 'classifying';
+		suggestions = []; // Clear previous suggestions
 		
 		// Add user message to LangGraph messages
 		const userMessage: LangGraphMessage = {
@@ -391,6 +475,9 @@
 			
 			console.log('[WebSearch] Stream complete with', langGraphMessages.length, 'messages');
 			
+			// Generate follow-up suggestions after search completes
+			generateSuggestions();
+			
 		} catch (e) {
 			const errorMessage = (e as Error).message;
 			console.error('[WebSearch] Error:', e);
@@ -415,13 +502,48 @@
 		threadId = null;
 		error = null;
 		streamingContent = '';
+		suggestions = [];
+	}
+
+	function loadThread(id: string) {
+		const thread = webSearchHistoryStore.getThread(id);
+		if (thread) {
+			isLoadingThread = true;
+			threadId = id;
+			langGraphMessages = [...thread.messages]; // Clone to avoid direct mutation
+			suggestions = thread.suggestions ? [...thread.suggestions] : [];
+			error = null;
+			streamingContent = '';
+			loadingSuggestions = false;
+			// Reset loading flag after state updates settle
+		setTimeout(() => {
+				isLoadingThread = false;
+			}, 0);
+		}
+	}
+
+	function handleSuggestionClick(suggestion: string) {
+		handleSearch(suggestion);
 	}
 </script>
 
-<div class="min-h-[calc(100vh-3.5rem)] px-4 py-8">
+<div class="flex h-[calc(100vh-3.5rem)]">
+	<!-- Sidebar (only for logged in users with history) -->
+	{#if isLoggedIn}
+		<ChatSidebar
+			currentThreadId={threadId}
+			onSelectThread={loadThread}
+			onNewChat={startNewChat}
+			collapsed={sidebarCollapsed}
+			onToggleCollapse={() => { sidebarCollapsed = !sidebarCollapsed; }}
+		/>
+	{/if}
+
+	<!-- Main content -->
+	<div class="flex-1 flex flex-col overflow-hidden">
 	{#if !isLoggedIn}
 		<!-- Demo page for logged out users -->
-		<div class="flex flex-col items-center justify-center py-16 text-center max-w-2xl mx-auto">
+			<div class="flex flex-col items-center justify-center py-16 text-center max-w-2xl mx-auto px-4">
 			<div class="relative mb-8">
 				<Globe class="h-24 w-24 text-cyan-500" />
 				<div class="absolute -bottom-2 -right-2 bg-primary text-primary-foreground rounded-full p-2">
@@ -459,78 +581,96 @@
 				</p>
 			</div>
 		</div>
-	{:else if hasChat}
-		<!-- Chat view -->
-		<div class="max-w-3xl mx-auto flex flex-col h-[calc(100vh-7rem)]">
-			<!-- Header with back button -->
-			<div class="flex items-center gap-3 mb-4 flex-shrink-0">
-				<button
-					onclick={startNewChat}
-					class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-				>
-					<ArrowLeft class="h-4 w-4" />
-					New search
-				</button>
+		{:else if hasChat}
+			<!-- Chat view -->
+			<div class="flex flex-col h-full max-w-3xl mx-auto w-full px-4">
+				<!-- Header with back button -->
+				<div class="flex items-center gap-3 py-4 flex-shrink-0">
+					<button
+						onclick={startNewChat}
+						class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+					>
+						<ArrowLeft class="h-4 w-4" />
+						New search
+					</button>
+					
+					{#if cyphertap.balance > 0}
+						<div class="ml-auto flex items-center gap-1.5 text-sm text-muted-foreground">
+							<Zap class="h-4 w-4 text-yellow-500" />
+							<span>{cyphertap.balance} sats</span>
+						</div>
+					{/if}
+				</div>
 				
-				{#if cyphertap.balance > 0}
-					<div class="ml-auto flex items-center gap-1.5 text-sm text-muted-foreground">
-						<Zap class="h-4 w-4 text-yellow-500" />
-						<span>{cyphertap.balance} sats</span>
-					</div>
-				{/if}
-			</div>
-			
-			<!-- Chat messages - scrollable area -->
-			<div 
-				bind:this={messagesContainer}
-				class="flex-1 overflow-y-auto mb-4 space-y-4"
-			>
-				<WebSearchChat 
-					messages={processedMessages}
-					isLoading={isStreaming}
-					streamingContent={showStreamingBubble ? streamingContent : ''}
-					{currentPhase}
-				/>
-			</div>
-			
-			<!-- Input - fixed at bottom -->
-			<div class="flex-shrink-0 pb-4">
-				<WebSearchInput 
-					onSubmit={handleSearch} 
-					isLoading={isStreaming}
-					placeholder="Ask a follow-up question..."
-				/>
+				<!-- Chat messages - scrollable area -->
+				<div 
+					bind:this={messagesContainer}
+					class="flex-1 overflow-y-auto space-y-4"
+				>
+					<WebSearchChat 
+						messages={processedMessages}
+						isLoading={isStreaming}
+						streamingContent={showStreamingBubble ? streamingContent : ''}
+						{currentPhase}
+					/>
+					
+					<!-- Related questions -->
+					{#if !isStreaming && suggestions.length > 0}
+						<RelatedQuestions
+							{suggestions}
+							onSelectSuggestion={handleSuggestionClick}
+							isLoading={isStreaming}
+						/>
+					{:else if loadingSuggestions}
+						<RelatedQuestions
+							suggestions={[]}
+							onSelectSuggestion={handleSuggestionClick}
+							isLoading={true}
+						/>
+					{/if}
+				</div>
+				
+				<!-- Input - fixed at bottom -->
+				<div class="flex-shrink-0 py-4">
+					<WebSearchInput 
+						onSubmit={handleSearch} 
+						isLoading={isStreaming}
+						placeholder="Ask a follow-up question..."
+					/>
 			</div>
 		</div>
 	{:else}
 		<!-- Hero section with search -->
+			<div class="flex-1 flex flex-col px-4">
 		<div class="flex flex-col items-center justify-center py-12 lg:py-20">
 			<h1 class="text-3xl lg:text-4xl font-light text-center mb-8 text-muted-foreground">
 				Search the web. <span class="text-foreground">Get answers.</span>
 			</h1>
-			
-			{#if cyphertap.balance > 0}
-				<div class="flex items-center gap-2 mb-4 text-sm text-muted-foreground">
-					<Zap class="h-4 w-4 text-yellow-500" />
-					<span>{cyphertap.balance} sats available</span>
-					<span class="text-xs">({MESSAGE_COST_SATS} sat per query)</span>
-				</div>
-			{/if}
+					
+					{#if cyphertap.balance > 0}
+						<div class="flex items-center gap-2 mb-4 text-sm text-muted-foreground">
+							<Zap class="h-4 w-4 text-yellow-500" />
+							<span>{cyphertap.balance} sats available</span>
+							<span class="text-xs">({MESSAGE_COST_SATS} sat per query)</span>
+						</div>
+					{/if}
 			
 			<WebSearchInput 
 				onSubmit={handleSearch} 
-				isLoading={isStreaming}
+						isLoading={isStreaming}
 				placeholder="What would you like to know?"
 			/>
-			
-			{#if error}
-				<p class="mt-4 text-sm text-destructive">{error}</p>
-			{/if}
+					
+					{#if error}
+						<p class="mt-4 text-sm text-destructive">{error}</p>
+					{/if}
 		</div>
 
 		<!-- Discovery feed -->
-		<div class="max-w-screen-lg mx-auto mt-8">
+				<div class="max-w-screen-lg mx-auto w-full mt-8 pb-8">
 			<DiscoveryFeed />
+				</div>
 		</div>
 	{/if}
+</div>
 </div>

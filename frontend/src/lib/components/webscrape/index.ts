@@ -4,3 +4,5 @@ export { default as MajorDiscoveryCard } from './MajorDiscoveryCard.svelte';
 export { default as DiscoveryFeed } from './DiscoveryFeed.svelte';
 export { default as SourceCitations } from './SourceCitations.svelte';
 export { default as WebSearchChat } from './WebSearchChat.svelte';
+export { default as ChatSidebar } from './ChatSidebar.svelte';
+export { default as RelatedQuestions } from './RelatedQuestions.svelte';
