@@ -1,6 +1,14 @@
 <script lang="ts">
-	import { Bot, User, Search, Globe, Loader2, Copy, Check, RefreshCw } from '@lucide/svelte';
+	import { Bot, User, Search, Globe, Loader2, Copy, Check, RefreshCw, ChevronDown, ChevronUp } from '@lucide/svelte';
 	import SourceCitations from './SourceCitations.svelte';
+
+	interface ToolCallWithStatus {
+		id: string;
+		name: string;
+		args: Record<string, unknown>;
+		status: 'pending' | 'executing' | 'completed' | 'error';
+		result?: { content: string };
+	}
 
 	interface ChatMessage {
 		id: string;
@@ -8,7 +16,7 @@
 		content: string;
 		sources?: Array<{ index: number; title: string; url: string; snippet?: string }>;
 		isStreaming?: boolean;
-		toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+		toolCalls?: ToolCallWithStatus[];
 	}
 
 	interface Props {
@@ -28,6 +36,17 @@
 	}: Props = $props();
 
 	let copiedId = $state<string | null>(null);
+	let expandedToolCalls = $state<Set<string>>(new Set());
+
+	function toggleToolCallExpand(toolCallId: string) {
+		const newSet = new Set(expandedToolCalls);
+		if (newSet.has(toolCallId)) {
+			newSet.delete(toolCallId);
+		} else {
+			newSet.add(toolCallId);
+		}
+		expandedToolCalls = newSet;
+	}
 
 	async function copyToClipboard(content: string, messageId: string) {
 		try {
@@ -45,6 +64,42 @@
 			case 'searching': return 'Searching the web...';
 			case 'synthesizing': return 'Synthesizing answer...';
 			default: return 'Thinking...';
+		}
+	}
+
+	function getToolCallIcon(name: string) {
+		switch (name) {
+			case 'web_search': return Search;
+			case 'scrape_url': return Globe;
+			default: return Search;
+		}
+	}
+
+	function formatToolCallDisplay(toolCall: ToolCallWithStatus): { icon: typeof Search; text: string; details?: string } {
+		switch (toolCall.name) {
+			case 'web_search': {
+				const query = toolCall.args.query as string;
+				return { 
+					icon: Search, 
+					text: toolCall.status === 'completed' ? 'Searched for:' : 'Searching for:',
+					details: query ? `"${query}"` : undefined
+				};
+			}
+			case 'scrape_url': {
+				const url = toolCall.args.url as string;
+				const domain = url ? new URL(url).hostname.replace('www.', '') : 'page';
+				return { 
+					icon: Globe, 
+					text: toolCall.status === 'completed' ? 'Read:' : 'Reading:',
+					details: domain
+				};
+			}
+			default:
+				return { 
+					icon: Search, 
+					text: `${toolCall.name}`,
+					details: undefined
+				};
 		}
 	}
 
@@ -72,7 +127,7 @@
 		result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-cyan-500 underline hover:no-underline">$1</a>');
 		
 		// Citation numbers [1], [2], etc.
-		result = result.replace(/\[(\d+)\]/g, '<sup class="text-cyan-500 font-medium">[$1]</sup>');
+		result = result.replace(/\[(\d+)\]/g, '<sup class="text-cyan-500 font-medium cursor-pointer hover:text-cyan-400">[$1]</sup>');
 		
 		// Lists
 		result = result.replace(/^[\-\*] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>');
@@ -88,50 +143,76 @@
 
 <div class="flex flex-col gap-4">
 	{#each messages as message (message.id)}
-		<div class="flex gap-3 {message.role === 'user' ? 'justify-end' : 'justify-start'}">
-			{#if message.role === 'assistant'}
+		{@const isUser = message.role === 'user'}
+		{@const hasContent = message.content && message.content.trim() !== ''}
+		{@const hasToolCalls = !isUser && message.toolCalls && message.toolCalls.length > 0}
+		
+		<div class="flex gap-3 {isUser ? 'justify-end' : 'justify-start'}">
+			{#if !isUser}
 				<!-- Assistant avatar -->
 				<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600">
 					<Bot class="h-4 w-4 text-white" />
 				</div>
 			{/if}
 			
-			<div class="flex max-w-[85%] flex-col gap-2 {message.role === 'user' ? 'items-end' : 'items-start'}">
-				<!-- Message bubble -->
-				<div class="rounded-2xl px-4 py-3 {message.role === 'user' 
-					? 'rounded-br-md bg-cyan-500 text-white' 
-					: 'rounded-bl-md bg-muted'
-				}">
-					{#if message.content}
-						{#if message.role === 'user'}
+			<div class="flex max-w-[85%] flex-col gap-2 {isUser ? 'items-end' : 'items-start'}">
+				<!-- Message bubble (only if has content) -->
+				{#if hasContent}
+					<div class="rounded-2xl px-4 py-3 {isUser 
+						? 'rounded-br-md bg-cyan-500 text-white' 
+						: 'rounded-bl-md bg-muted'
+					}">
+						{#if isUser}
 							<p class="text-sm">{message.content}</p>
 						{:else}
 							<div class="prose prose-sm max-w-none dark:prose-invert text-sm">
 								{@html parseMarkdown(message.content)}
 							</div>
 						{/if}
-					{:else if message.isStreaming}
-						<div class="flex gap-1">
-							<span class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 0ms"></span>
-							<span class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 150ms"></span>
-							<span class="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/50" style="animation-delay: 300ms"></span>
-						</div>
-					{/if}
-				</div>
+					</div>
+				{/if}
 
-				<!-- Tool calls indicator -->
-				{#if message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0}
-					<div class="flex flex-wrap gap-2">
-						{#each message.toolCalls as toolCall}
-							<div class="flex items-center gap-1.5 rounded-full bg-cyan-500/10 px-3 py-1 text-xs text-cyan-600 dark:text-cyan-400">
-								{#if toolCall.name === 'web_search'}
-									<Search class="h-3 w-3" />
-									<span>Searched: {toolCall.args?.query || 'web'}</span>
-								{:else if toolCall.name === 'scrape_url'}
-									<Globe class="h-3 w-3" />
-									<span>Reading page...</span>
-								{:else}
-									<span>{toolCall.name}</span>
+				<!-- Tool calls display - shows what searches were performed -->
+				{#if hasToolCalls}
+					<div class="flex flex-col gap-1.5 w-full">
+						{#each message.toolCalls as toolCall (toolCall.id)}
+							{@const formatted = formatToolCallDisplay(toolCall)}
+							{@const Icon = formatted.icon}
+							{@const isExpanded = expandedToolCalls.has(toolCall.id)}
+							
+							<div class="rounded-lg border border-cyan-500/20 bg-cyan-500/5 overflow-hidden">
+								<!-- Tool call header -->
+								<button
+									onclick={() => toggleToolCallExpand(toolCall.id)}
+									class="flex items-center gap-2 w-full px-3 py-2 text-sm text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/10 transition-colors"
+								>
+									<Icon class="h-4 w-4 shrink-0" />
+									<span class="font-medium">{formatted.text}</span>
+									{#if formatted.details}
+										<span class="text-cyan-700 dark:text-cyan-300 italic truncate">{formatted.details}</span>
+									{/if}
+									
+									{#if toolCall.status === 'pending' || toolCall.status === 'executing'}
+										<Loader2 class="h-3.5 w-3.5 animate-spin ml-auto" />
+									{:else if toolCall.result}
+										<div class="ml-auto">
+											{#if isExpanded}
+												<ChevronUp class="h-4 w-4 opacity-50" />
+											{:else}
+												<ChevronDown class="h-4 w-4 opacity-50" />
+											{/if}
+										</div>
+									{/if}
+								</button>
+								
+								<!-- Expanded tool result -->
+								{#if isExpanded && toolCall.result?.content}
+									<div class="border-t border-cyan-500/20 px-3 py-2 bg-muted/50">
+										<p class="text-xs text-muted-foreground mb-1">Result:</p>
+										<div class="text-sm text-foreground/80 max-h-32 overflow-y-auto">
+											<pre class="whitespace-pre-wrap break-all font-mono text-xs">{toolCall.result.content.slice(0, 500)}{toolCall.result.content.length > 500 ? '...' : ''}</pre>
+										</div>
+									</div>
 								{/if}
 							</div>
 						{/each}
@@ -139,14 +220,14 @@
 				{/if}
 
 				<!-- Sources -->
-				{#if message.role === 'assistant' && message.sources && message.sources.length > 0}
+				{#if !isUser && message.sources && message.sources.length > 0}
 					<div class="w-full">
 						<SourceCitations sources={message.sources} compact />
 					</div>
 				{/if}
 
 				<!-- Actions for assistant messages -->
-				{#if message.role === 'assistant' && !message.isStreaming && message.content}
+				{#if !isUser && !message.isStreaming && hasContent}
 					<div class="flex items-center gap-1">
 						<button
 							onclick={() => copyToClipboard(message.content, message.id)}
@@ -173,7 +254,7 @@
 				{/if}
 			</div>
 			
-			{#if message.role === 'user'}
+			{#if isUser}
 				<!-- User avatar -->
 				<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">
 					<User class="h-4 w-4 text-muted-foreground" />
@@ -213,4 +294,3 @@
 		</div>
 	{/if}
 </div>
-

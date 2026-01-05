@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { toast } from 'svelte-sonner';
-	import { Globe, User, LogIn, Search, Newspaper, Sparkles, Zap, ArrowLeft } from '@lucide/svelte';
+	import { Globe, User, LogIn, Search, Newspaper, Sparkles, Zap, ArrowLeft, Bot, Loader2 } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
 	import { modeStore } from '$lib/stores/mode.svelte';
 	import { walletStore } from '$lib/stores/wallet.svelte';
@@ -9,25 +9,49 @@
 	import { WebSearchInput, DiscoveryFeed, WebSearchChat } from '$lib/components/webscrape';
 	import type { PaymentInfo } from '$lib/types/chat';
 
-	// Chat state
-	interface ChatMessage {
+	// =============================================================================
+	// TYPES
+	// =============================================================================
+
+	interface LangGraphMessage {
+		type: 'human' | 'ai' | 'tool';
+		content: string | unknown[];
+		id?: string;
+		name?: string;
+		tool_call_id?: string;
+		tool_calls?: Array<{ id: string; name: string; args?: Record<string, unknown> }>;
+	}
+
+	interface ToolCallWithStatus {
+		id: string;
+		name: string;
+		args: Record<string, unknown>;
+		status: 'pending' | 'executing' | 'completed' | 'error';
+		result?: { content: string };
+	}
+
+	interface ProcessedMessage {
 		id: string;
 		role: 'user' | 'assistant';
 		content: string;
+		toolCalls?: ToolCallWithStatus[];
 		sources?: Array<{ index: number; title: string; url: string; snippet?: string }>;
 		isStreaming?: boolean;
-		toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
 	}
 
-	let messages = $state<ChatMessage[]>([]);
-	let isSearching = $state(false);
+	// =============================================================================
+	// STATE
+	// =============================================================================
+
+	let langGraphMessages = $state<LangGraphMessage[]>([]);
+	let isStreaming = $state(false);
 	let streamingContent = $state('');
 	let currentPhase = $state<'idle' | 'classifying' | 'searching' | 'synthesizing'>('idle');
 	let threadId = $state<string | null>(null);
 	let error = $state<string | null>(null);
+	let messagesContainer = $state<HTMLDivElement | null>(null);
 	
 	const isLoggedIn = $derived(cyphertap.isLoggedIn);
-	const hasChat = $derived(messages.length > 0);
 
 	// Message cost in sats
 	const MESSAGE_COST_SATS = parseInt(import.meta.env.VITE_MESSAGE_COST_SATS || '1', 10);
@@ -35,13 +59,141 @@
 	// Create payment generator bound to cyphertap
 	const generatePayment = walletStore.createPaymentGenerator(cyphertap);
 
-	// Ensure mode is set correctly when navigating to this page
+	// =============================================================================
+	// PROCESSED MESSAGES - Convert LangGraph messages to display format
+	// =============================================================================
+
+	const processedMessages = $derived.by((): ProcessedMessage[] => {
+		const messageMap = new Map<string, { message: LangGraphMessage; toolCalls: ToolCallWithStatus[] }>();
+		
+		langGraphMessages.forEach((message, index) => {
+			if (message.type === 'ai') {
+				// Extract tool calls from AI message
+				const toolCallsWithStatus: ToolCallWithStatus[] = [];
+				
+				if (message.tool_calls && message.tool_calls.length > 0) {
+					for (const tc of message.tool_calls) {
+						toolCallsWithStatus.push({
+							id: tc.id || `tool-${index}-${tc.name}`,
+							name: tc.name,
+							args: tc.args || {},
+							status: 'pending',
+						});
+					}
+				}
+				
+				// Only include AI messages if they have content OR tool calls
+				const messageContent = extractStringContent(message);
+				const hasContent = messageContent && messageContent.trim() !== '';
+				const hasToolCalls = toolCallsWithStatus.length > 0;
+				
+				if (hasContent || hasToolCalls) {
+					const stableId = message.id || `ai-${index}`;
+					messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
+				}
+				
+			} else if (message.type === 'tool') {
+				// Match tool result to its tool call
+				const toolCallId = message.tool_call_id;
+				if (!toolCallId) return;
+				
+				for (const [, data] of messageMap.entries()) {
+					const toolCallIndex = data.toolCalls.findIndex(tc => tc.id === toolCallId);
+					if (toolCallIndex !== -1) {
+						data.toolCalls[toolCallIndex] = {
+							...data.toolCalls[toolCallIndex],
+							status: 'completed',
+							result: { content: extractStringContent(message) }
+						};
+						break;
+					}
+				}
+				
+			} else if (message.type === 'human') {
+				const stableId = message.id || `human-${index}`;
+				messageMap.set(stableId, { message, toolCalls: [] });
+			}
+		});
+		
+		return Array.from(messageMap.entries()).map(([id, data]): ProcessedMessage => {
+			const content = extractStringContent(data.message);
+			
+			// Extract sources from content if present
+			let sources: ProcessedMessage['sources'] = [];
+			if (data.message.type === 'ai' && content) {
+				const sourcesMatch = content.match(/\*\*Sources:\*\*[\s\S]*$/);
+				if (sourcesMatch) {
+					const urlMatches = [...sourcesMatch[0].matchAll(/(\d+)\.\s*\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)];
+					sources = urlMatches.map((match) => ({
+						index: parseInt(match[1]),
+						title: match[2],
+						url: match[3],
+					}));
+				}
+			}
+			
+			return {
+				id,
+				role: data.message.type === 'human' ? 'user' : 'assistant',
+				content,
+				toolCalls: data.toolCalls.length > 0 ? data.toolCalls : undefined,
+				sources: sources.length > 0 ? sources : undefined,
+			};
+		});
+	});
+
+	const hasChat = $derived(processedMessages.length > 0 || isStreaming);
+
+	// Show streaming bubble only when there's new content not yet in synced messages
+	const showStreamingBubble = $derived.by(() => {
+		if (!isStreaming || !streamingContent) return false;
+		
+		// Find the latest human message index
+		const lastHumanIdx = processedMessages.findLastIndex(m => m.role === 'user');
+		
+		// Find if there is an AI message AFTER the latest human message
+		const lastAiAfterHuman = processedMessages.findLast((m, i) => m.role === 'assistant' && i > lastHumanIdx);
+		
+		// If we have an AI message already synced, check if streaming content is ahead
+		if (lastAiAfterHuman && lastAiAfterHuman.content) {
+			// If the synced history content is already nearly as long as the streaming content,
+			// the 'values' event has caught up, so hide the separate bubble
+			if (lastAiAfterHuman.content.length > 0 && streamingContent.startsWith(lastAiAfterHuman.content.slice(0, 20))) {
+				return false;
+			}
+		}
+		
+		return true;
+	});
+
+	// =============================================================================
+	// HELPERS
+	// =============================================================================
+
+	function extractStringContent(message: LangGraphMessage): string {
+		if (typeof message.content === 'string') {
+			return message.content;
+		}
+		if (Array.isArray(message.content)) {
+			return message.content
+				.filter((c): c is { type: 'text'; text: string } => 
+					typeof c === 'object' && c !== null && 'type' in c && c.type === 'text'
+				)
+				.map(c => c.text)
+				.join('\n');
+		}
+		return '';
+	}
+
+	// =============================================================================
+	// LIFECYCLE
+	// =============================================================================
+
 	onMount(() => {
 		if (modeStore.current !== 'webscrape') {
 			modeStore.setMode('webscrape');
 		}
 		
-		// Sync wallet state
 		walletStore.syncWithCypherTap({
 			balance: cyphertap.balance,
 			isReady: cyphertap.isReady,
@@ -60,21 +212,37 @@
 		});
 	});
 
+	// Auto-scroll on new messages
+	$effect(() => {
+		const _msgs = processedMessages.length;
+		const _streaming = streamingContent;
+		
+		tick().then(() => {
+			if (messagesContainer) {
+				messagesContainer.scrollTop = messagesContainer.scrollHeight;
+			}
+		});
+	});
+
+	// =============================================================================
+	// SEARCH HANDLER
+	// =============================================================================
+
 	async function handleSearch(query: string) {
-		if (isSearching) return;
+		if (isStreaming) return;
 		
 		error = null;
-		isSearching = true;
+		isStreaming = true;
 		streamingContent = '';
 		currentPhase = 'classifying';
 		
-		// Add user message
-		const userMessageId = crypto.randomUUID();
-		messages = [...messages, {
-			id: userMessageId,
-			role: 'user',
+		// Add user message to LangGraph messages
+		const userMessage: LangGraphMessage = {
+			type: 'human',
 			content: query,
-		}];
+			id: crypto.randomUUID(),
+		};
+		langGraphMessages = [...langGraphMessages, userMessage];
 		
 		// Generate payment token (optional - for paid mode)
 		let payment: PaymentInfo | null = null;
@@ -98,8 +266,8 @@
 			const agentUrl = settingsStore.agentUrl;
 			
 			// Format messages for LangGraph
-			const formattedMessages = messages.map(m => ({
-				type: m.role === 'user' ? 'human' : 'ai',
+			const formattedMessages = langGraphMessages.map(m => ({
+				type: m.type,
 				content: m.content,
 			}));
 			
@@ -134,7 +302,8 @@
 							thread_id: threadId,
 						},
 					},
-					stream_mode: 'messages',
+					// Use multiple stream modes for comprehensive event handling
+					stream_mode: ['messages', 'values'],
 				}),
 			});
 			
@@ -146,14 +315,10 @@
 				throw new Error('No response body');
 			}
 			
-			currentPhase = 'synthesizing';
-			
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let buffer = '';
-			let assistantContent = '';
-			let toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
-			let sources: Array<{ index: number; title: string; url: string; snippet?: string }> = [];
+			let currentContent = '';
 			
 			while (true) {
 				const { done, value } = await reader.read();
@@ -166,34 +331,57 @@
 				buffer = lines.pop() || '';
 				
 				for (const line of lines) {
-					if (line.startsWith('data: ')) {
-						const data = line.slice(6);
-						if (data === '[DONE]') continue;
+					if (!line.startsWith('event:') && !line.startsWith('data:')) continue;
+					
+					// Parse event type
+					if (line.startsWith('event:')) {
+						// Event type line - handled with next data line
+						continue;
+					}
+					
+					if (line.startsWith('data:')) {
+						const data = line.slice(5).trim();
+						if (!data || data === '[DONE]') continue;
 						
 						try {
 							const parsed = JSON.parse(data);
 							
-							// Handle different event types from LangGraph
-							if (parsed.type === 'ai' && parsed.content) {
-								assistantContent += parsed.content;
-								streamingContent = assistantContent;
-							} else if (parsed.content && typeof parsed.content === 'string') {
-								// Some responses come without type
-								assistantContent += parsed.content;
-								streamingContent = assistantContent;
-							} else if (parsed.tool_calls) {
-								for (const tc of parsed.tool_calls) {
-									toolCalls.push({
-										name: tc.name,
-										args: tc.args || {},
-									});
+							// Handle messages/partial events (streaming tokens)
+							if (Array.isArray(parsed) && parsed.length > 0) {
+								const lastChunk = parsed[parsed.length - 1];
+								if (lastChunk?.type === 'ai' && lastChunk.content) {
+									const newContent = lastChunk.content;
+									if (newContent.length > currentContent.length) {
+										currentContent = newContent;
+										streamingContent = currentContent;
+										currentPhase = 'synthesizing';
+									}
+								}
+								// Detect tool calls from streaming
+								if (lastChunk?.type === 'ai' && lastChunk.tool_calls?.length > 0) {
+									currentPhase = 'searching';
 								}
 							}
 							
-							// Check for sources in the response
-							if (parsed.sources) {
-								sources = parsed.sources;
+							// Handle values events (full state snapshots)
+							if (parsed.messages && Array.isArray(parsed.messages)) {
+								console.log('[WebSearch] Values event - syncing', parsed.messages.length, 'messages');
+								langGraphMessages = parsed.messages;
+								
+								// Reset content tracker for next iteration
+								const lastMessage = parsed.messages[parsed.messages.length - 1];
+								if (lastMessage?.type === 'ai') {
+									currentContent = extractStringContent(lastMessage);
+									
+									// Check for tool calls
+									if (lastMessage.tool_calls?.length > 0) {
+										currentPhase = 'searching';
+									} else if (currentContent) {
+										currentPhase = 'synthesizing';
+									}
+								}
 							}
+							
 						} catch {
 							// Skip malformed JSON
 						}
@@ -201,30 +389,7 @@
 				}
 			}
 			
-			// Extract sources from the response content if not provided separately
-			if (sources.length === 0 && assistantContent) {
-				// Simple extraction of URLs mentioned in Sources section
-				const sourcesMatch = assistantContent.match(/\*\*Sources:\*\*[\s\S]*$/);
-				if (sourcesMatch) {
-					const urlMatches = [...sourcesMatch[0].matchAll(/\d+\.\s*\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)];
-					sources = urlMatches.map((match, i) => ({
-						index: i + 1,
-						title: match[1],
-						url: match[2],
-					}));
-				}
-			}
-			
-			// Add assistant message
-			if (assistantContent) {
-				messages = [...messages, {
-					id: crypto.randomUUID(),
-					role: 'assistant',
-					content: assistantContent,
-					sources,
-					toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-				}];
-			}
+			console.log('[WebSearch] Stream complete with', langGraphMessages.length, 'messages');
 			
 		} catch (e) {
 			const errorMessage = (e as Error).message;
@@ -233,22 +398,23 @@
 			toast.error('Search failed', { description: errorMessage });
 			
 			// Add error message
-			messages = [...messages, {
-				id: crypto.randomUUID(),
-				role: 'assistant',
+			langGraphMessages = [...langGraphMessages, {
+				type: 'ai',
 				content: `I encountered an error while searching: ${errorMessage}. Please try again.`,
+				id: crypto.randomUUID(),
 			}];
 		} finally {
-			isSearching = false;
+			isStreaming = false;
 			streamingContent = '';
 			currentPhase = 'idle';
 		}
 	}
 
 	function startNewChat() {
-		messages = [];
+		langGraphMessages = [];
 		threadId = null;
 		error = null;
+		streamingContent = '';
 	}
 </script>
 
@@ -295,9 +461,9 @@
 		</div>
 	{:else if hasChat}
 		<!-- Chat view -->
-		<div class="max-w-3xl mx-auto">
+		<div class="max-w-3xl mx-auto flex flex-col h-[calc(100vh-7rem)]">
 			<!-- Header with back button -->
-			<div class="flex items-center gap-3 mb-6">
+			<div class="flex items-center gap-3 mb-4 flex-shrink-0">
 				<button
 					onclick={startNewChat}
 					class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -314,21 +480,24 @@
 				{/if}
 			</div>
 			
-			<!-- Chat messages -->
-			<div class="mb-6">
+			<!-- Chat messages - scrollable area -->
+			<div 
+				bind:this={messagesContainer}
+				class="flex-1 overflow-y-auto mb-4 space-y-4"
+			>
 				<WebSearchChat 
-					{messages}
-					isLoading={isSearching}
-					{streamingContent}
+					messages={processedMessages}
+					isLoading={isStreaming}
+					streamingContent={showStreamingBubble ? streamingContent : ''}
 					{currentPhase}
 				/>
 			</div>
 			
-			<!-- Input -->
-			<div class="sticky bottom-4">
+			<!-- Input - fixed at bottom -->
+			<div class="flex-shrink-0 pb-4">
 				<WebSearchInput 
 					onSubmit={handleSearch} 
-					isLoading={isSearching}
+					isLoading={isStreaming}
 					placeholder="Ask a follow-up question..."
 				/>
 			</div>
@@ -350,7 +519,7 @@
 			
 			<WebSearchInput 
 				onSubmit={handleSearch} 
-				isLoading={isSearching}
+				isLoading={isStreaming}
 				placeholder="What would you like to know?"
 			/>
 			
