@@ -1,18 +1,10 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { BookOpen, Globe, User, ArrowRight, Zap, Shield, Key } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
 	import { modeStore, MODES } from '$lib/stores/mode.svelte';
 
 	const isLoggedIn = $derived(cyphertap.isLoggedIn);
-
-	// If logged in, redirect to the current mode's page
-	$effect(() => {
-		if (isLoggedIn) {
-			goto(modeStore.currentInfo.route);
-		}
-	});
 
 	function navigateToMode(route: string) {
 		goto(route);
@@ -43,17 +35,67 @@
 				A Nostr-native platform for reading, learning, and discovering.
 			</p>
 			
-			<!-- Login prompt -->
-			<div class="bg-secondary/50 border border-border rounded-2xl p-6 mb-12 max-w-md mx-auto">
-				<User class="h-10 w-10 text-cyan-500 mx-auto mb-4" />
-				<h2 class="text-lg font-semibold mb-2">Log in to get started</h2>
-				<p class="text-sm text-muted-foreground mb-4">
-					Click the user icon in the top right to log in with your Nostr key.
-				</p>
-				<p class="text-xs text-muted-foreground">
-					No account needed — just your Nostr identity.
-				</p>
-			</div>
+			{#if isLoggedIn}
+				<!-- Getting Started for logged-in users -->
+				<div class="relative bg-gradient-to-br from-cyan-500/10 to-purple-500/10 border border-cyan-500/30 rounded-2xl p-8 mb-12 max-w-lg mx-auto">
+					<!-- Curved arrow pointing up-left to the mode selector -->
+					<div class="absolute -top-16 left-8 hidden sm:block">
+						<svg width="120" height="80" viewBox="0 0 120 80" fill="none" class="text-cyan-500">
+							<!-- Curved arrow path -->
+							<path 
+								d="M110 75 C 90 75, 40 70, 25 45 C 15 28, 15 15, 20 8" 
+								stroke="currentColor" 
+								stroke-width="2.5" 
+								stroke-linecap="round"
+								stroke-dasharray="6 4"
+								fill="none"
+							/>
+							<!-- Arrow head -->
+							<path 
+								d="M12 12 L20 5 L24 15" 
+								stroke="currentColor" 
+								stroke-width="2.5" 
+								stroke-linecap="round" 
+								stroke-linejoin="round"
+								fill="none"
+							/>
+						</svg>
+					</div>
+					
+					<div class="flex items-center justify-center gap-2 mb-4">
+						<span class="text-3xl">🎉</span>
+						<h2 class="text-xl font-semibold">Welcome!</h2>
+					</div>
+					<p class="text-muted-foreground mb-6">
+						You're all set. Now choose a mode to get started:
+					</p>
+					
+					<div class="flex items-center justify-center gap-2 text-sm text-cyan-500 font-medium">
+						<span class="hidden sm:inline">Click</span>
+						<span class="px-3 py-1.5 rounded-lg bg-cyan-500/20 border border-cyan-500/40 inline-flex items-center gap-1.5">
+							<span>✨</span>
+							<span>Select a mode</span>
+						</span>
+						<span class="hidden sm:inline">above</span>
+					</div>
+					
+					<p class="text-xs text-muted-foreground mt-4">
+						Or explore the modes below
+					</p>
+				</div>
+			{:else}
+				<!-- Login prompt for logged-out users -->
+				<div class="bg-secondary/50 border border-border rounded-2xl p-6 mb-12 max-w-md mx-auto">
+					<User class="h-10 w-10 text-cyan-500 mx-auto mb-4" />
+					<h2 class="text-lg font-semibold mb-2">Log in to get started</h2>
+					<p class="text-sm text-muted-foreground mb-4">
+						Click the user icon in the top right to log in with your Nostr key.
+					</p>
+					<p class="text-xs text-muted-foreground">
+						No account needed — just your Nostr identity.
+					</p>
+				</div>
+			{/if}
 			
 			<!-- Mode cards -->
 			<div class="mb-12">
