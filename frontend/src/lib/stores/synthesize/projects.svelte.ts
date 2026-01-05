@@ -26,7 +26,9 @@ const sortedProjects = $derived([...projects].sort((a, b) => b.updatedAt - a.upd
 // Persistence helpers
 async function persistProject(project: Project): Promise<void> {
 	try {
-		await synthesizeDb.projects.save(project);
+		// Use $state.snapshot to convert reactive proxy to plain object for IndexedDB
+		const plainProject = $state.snapshot(project);
+		await synthesizeDb.projects.save(plainProject);
 	} catch (error) {
 		console.error('Failed to persist project:', error);
 	}

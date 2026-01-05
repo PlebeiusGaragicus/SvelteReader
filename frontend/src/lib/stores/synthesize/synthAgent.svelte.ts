@@ -53,7 +53,30 @@ interface ThreadRunState {
 
 const runStates = $state<Record<string, ThreadRunState>>({});
 
-function getThreadState(localThreadId: string): ThreadRunState {
+// Default state to return when thread doesn't exist (avoids mutation in $derived)
+const DEFAULT_THREAD_STATE: ThreadRunState = {
+	isStreaming: false,
+	isInterrupted: false,
+	langGraphThreadId: null,
+	error: null,
+	pendingToolCalls: [],
+	streamingContent: '',
+	langGraphMessages: [],
+	hitlInterrupt: null,
+	hitlInterruptId: null,
+	awaitingHumanResponse: false,
+	clientToolInterrupt: null,
+	clarificationInterrupt: null,
+	todos: []
+};
+
+// Read-only getter - DOES NOT mutate state (safe for $derived contexts)
+function getRunState(threadId: string): ThreadRunState {
+	return runStates[threadId] ?? DEFAULT_THREAD_STATE;
+}
+
+// Ensures thread state exists - call this before mutating state
+function ensureThreadState(localThreadId: string): ThreadRunState {
 	if (!runStates[localThreadId]) {
 		runStates[localThreadId] = {
 			isStreaming: false,
@@ -76,11 +99,7 @@ function getThreadState(localThreadId: string): ThreadRunState {
 
 // Reactive helpers
 const currentLocalThreadId = $derived(synthThreadStore.currentThreadId);
-const currentState = $derived(currentLocalThreadId ? getThreadState(currentLocalThreadId) : null);
-
-function getRunState(threadId: string): ThreadRunState {
-	return getThreadState(threadId);
-}
+const currentState = $derived(currentLocalThreadId ? getRunState(currentLocalThreadId) : null);
 
 // =============================================================================
 // MESSAGE CONVERSION
@@ -152,7 +171,7 @@ function convertLangGraphMessages(
 // =============================================================================
 
 function updateThreadStatus(localThreadId: string) {
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 	let status: 'idle' | 'busy' | 'interrupted' | 'error' = 'idle';
 
 	if (state.error) {
@@ -200,7 +219,7 @@ async function sendMessage(
 	langGraphThreadId: string | null,
 	localThreadId: string
 ): Promise<{ langGraphThreadId: string }> {
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 	const thread = synthThreadStore.threads.find((t) => t.id === localThreadId);
 	const assistantId = thread?.assistantId || 'deepresearch';
 	const projectId = thread?.projectId || '';
@@ -419,7 +438,7 @@ async function resumeWithDecisions(
 	const localThreadId = threadId || currentLocalThreadId;
 	if (!localThreadId) return;
 
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 	if (!state.langGraphThreadId || !state.awaitingHumanResponse || !state.hitlInterruptId) {
 		console.error('[SynthAgent] Cannot resume: no active HITL interrupt');
 		return;
@@ -522,7 +541,7 @@ async function resumeWithDecisions(
 async function approveAllActions(threadId?: string): Promise<void> {
 	const localThreadId = threadId || currentLocalThreadId;
 	if (!localThreadId) return;
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 	if (!state.hitlInterrupt) return;
 	const decisions: HITLDecision[] = state.hitlInterrupt.action_requests.map(() => ({
 		type: 'approve' as const
@@ -533,7 +552,7 @@ async function approveAllActions(threadId?: string): Promise<void> {
 async function rejectAllActions(threadId?: string): Promise<void> {
 	const localThreadId = threadId || currentLocalThreadId;
 	if (!localThreadId) return;
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 	if (!state.hitlInterrupt) return;
 	const decisions: HITLDecision[] = state.hitlInterrupt.action_requests.map(() => ({
 		type: 'reject' as const
@@ -560,7 +579,7 @@ async function resumeWithClarificationResponse(
 ): Promise<void> {
 	const localThreadId = threadId || currentLocalThreadId;
 	if (!localThreadId) return;
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 
 	if (!state.clarificationInterrupt || !state.langGraphThreadId || !state.hitlInterruptId) {
 		console.error('[SynthAgent] No pending clarification interrupt to respond to');
@@ -671,7 +690,7 @@ async function resumeWithClarificationResponse(
 async function stopStreaming(threadId?: string): Promise<void> {
 	const localThreadId = threadId || currentLocalThreadId;
 	if (!localThreadId) return;
-	const state = getThreadState(localThreadId);
+	const state = ensureThreadState(localThreadId);
 
 	// TODO: Implement cancel via LangGraph API
 
@@ -690,7 +709,7 @@ function clearError(): void {
 
 function resetStream(): void {
 	if (currentLocalThreadId) {
-		const state = getThreadState(currentLocalThreadId);
+		const state = ensureThreadState(currentLocalThreadId);
 		state.isStreaming = false;
 		state.isInterrupted = false;
 		state.langGraphThreadId = null;

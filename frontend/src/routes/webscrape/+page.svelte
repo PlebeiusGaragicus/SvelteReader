@@ -510,13 +510,16 @@
 		if (thread) {
 			isLoadingThread = true;
 			threadId = id;
-			langGraphMessages = [...thread.messages]; // Clone to avoid direct mutation
+			// Deep clone to break reactive proxy connection from the store
+			// This prevents infinite loops where reading message properties
+			// creates dependencies on store state that gets updated by saveThread
+			langGraphMessages = structuredClone(thread.messages);
 			suggestions = thread.suggestions ? [...thread.suggestions] : [];
 			error = null;
 			streamingContent = '';
 			loadingSuggestions = false;
 			// Reset loading flag after state updates settle
-		setTimeout(() => {
+			setTimeout(() => {
 				isLoadingThread = false;
 			}, 0);
 		}

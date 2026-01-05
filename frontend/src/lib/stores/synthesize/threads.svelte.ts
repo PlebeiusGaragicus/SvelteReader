@@ -40,7 +40,9 @@ function getProjectThreads(projectId: string): Thread[] {
 
 async function persistThread(thread: Thread): Promise<void> {
 	try {
-		await synthesizeDb.threads.save(thread);
+		// Use $state.snapshot to convert reactive proxy to plain object for IndexedDB
+		const plainThread = $state.snapshot(thread);
+		await synthesizeDb.threads.save(plainThread);
 	} catch (e) {
 		console.error('[ThreadStore] Failed to persist thread:', e);
 	}
@@ -50,7 +52,9 @@ async function persistMessages(threadId: string, messages: Message[]): Promise<v
 	try {
 		await synthesizeDb.messages.deleteByThread(threadId);
 		if (messages.length > 0) {
-			await synthesizeDb.messages.saveMany(messages);
+			// Use $state.snapshot to convert reactive proxies to plain objects for IndexedDB
+			const plainMessages = $state.snapshot(messages);
+			await synthesizeDb.messages.saveMany(plainMessages);
 		}
 	} catch (e) {
 		console.error('[ThreadStore] Failed to persist messages:', e);
