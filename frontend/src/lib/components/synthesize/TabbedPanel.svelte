@@ -7,6 +7,7 @@
 		synthWorkspaceStore,
 		type TabItem
 	} from '$lib/stores/synthesize';
+	import NewTabMenu from './NewTabMenu.svelte';
 
 	interface Props {
 		column: 'left' | 'right';
@@ -65,9 +66,8 @@
 
 <div class="flex h-full flex-col bg-zinc-950">
 	<!-- Tab bar -->
-	{#if tabs.length > 0}
-		<div class="flex h-10 items-center gap-1 border-b border-zinc-800 bg-zinc-900/50 px-2">
-			<div class="flex flex-1 gap-1 overflow-x-auto">
+	<div class="flex h-10 items-center gap-1 border-b border-zinc-800 bg-zinc-900/50 px-2">
+		<div class="flex flex-1 gap-1 overflow-x-auto">
 			{#each tabs as tab (tab.id)}
 				{@const TabIcon = getTabIcon(tab.type)}
 				<div
@@ -91,25 +91,28 @@
 					</button>
 				</div>
 			{/each}
-			</div>
-
-			{#if showClosePanel && onClosePanel}
-				<button
-					onclick={onClosePanel}
-					class="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-					title="Close panel"
-				>
-					<PanelRightClose class="h-4 w-4" />
-				</button>
-			{/if}
 		</div>
-	{/if}
+
+		<!-- New tab button -->
+		<NewTabMenu {column} />
+
+		{#if showClosePanel && onClosePanel}
+			<button
+				onclick={onClosePanel}
+				class="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+				title="Close panel"
+			>
+				<PanelRightClose class="h-4 w-4" />
+			</button>
+		{/if}
+	</div>
 
 	<!-- Content area -->
 	<div class="flex-1 overflow-hidden">
 		{#if tabs.length === 0}
-			<div class="flex h-full items-center justify-center text-zinc-600">
+			<div class="flex h-full flex-col items-center justify-center gap-4 text-zinc-600">
 				<p class="text-sm">No tabs open</p>
+				<p class="text-xs">Click the + button to get started</p>
 			</div>
 		{:else if activeTabId}
 			{@const activeTab = tabs.find((t) => t.id === activeTabId)}

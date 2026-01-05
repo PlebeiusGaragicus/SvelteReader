@@ -6,4 +6,6 @@ export { default as TabbedPanel } from './TabbedPanel.svelte';
 export { default as SynthChatPanel } from './SynthChatPanel.svelte';
 export { default as FileEditor } from './FileEditor.svelte';
 export { default as SourceViewer } from './SourceViewer.svelte';
+export { default as MarkdownEditor } from './MarkdownEditor.svelte';
+export { default as NewTabMenu } from './NewTabMenu.svelte';
 

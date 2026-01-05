@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import { synthArtifactStore } from '$lib/stores/synthesize';
+	import MarkdownEditor from './MarkdownEditor.svelte';
 
 	interface Props {
 		artifactId: string | null;
@@ -8,7 +9,6 @@
 
 	let { artifactId }: Props = $props();
 
-	let textareaRef = $state<HTMLTextAreaElement | undefined>(undefined);
 	let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	const artifact = $derived(
@@ -21,10 +21,9 @@
 
 	const content = $derived(artifactId ? synthArtifactStore.getLiveContent(artifactId) || '' : '');
 
-	function handleInput(e: Event) {
-		const target = e.target as HTMLTextAreaElement;
+	function handleContentChange(newContent: string) {
 		if (artifactId) {
-			synthArtifactStore.updateLiveContent(artifactId, target.value);
+			synthArtifactStore.updateLiveContent(artifactId, newContent);
 
 			// Debounced auto-save
 			if (saveTimeout) {
@@ -35,6 +34,16 @@
 					synthArtifactStore.saveArtifactNow(artifactId);
 				}
 			}, 2000);
+		}
+	}
+
+	function handleSave() {
+		if (saveTimeout) {
+			clearTimeout(saveTimeout);
+			saveTimeout = null;
+		}
+		if (artifactId) {
+			synthArtifactStore.saveArtifactNow(artifactId);
 		}
 	}
 
@@ -71,15 +80,11 @@
 
 		<!-- Editor -->
 		<div class="flex-1 overflow-hidden">
-			<textarea
-				bind:this={textareaRef}
-				value={content}
-				oninput={handleInput}
-				class="h-full w-full resize-none border-0 bg-zinc-900 p-4 font-mono text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none"
-				placeholder="Start writing..."
-				spellcheck="false"
-			></textarea>
+			<MarkdownEditor
+				{content}
+				onContentChange={handleContentChange}
+				onSave={handleSave}
+			/>
 		</div>
 	{/if}
 </div>
-
