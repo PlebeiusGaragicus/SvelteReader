@@ -3,8 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { onMount, onDestroy } from 'svelte';
 	import { mode } from 'mode-watcher';
-	import { books } from '$lib/stores/books';
-	import { annotations } from '$lib/stores/annotations';
+	import { books } from '$lib/stores/books.svelte';
+	import { annotations } from '$lib/stores/annotations.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { indexingStore } from '$lib/stores/indexing.svelte';
 	import { getEpubData, getEpubDataBySha256 } from '$lib/services/storageService';
@@ -33,10 +33,10 @@
 	const isSpectating = $derived(spectateStore.isSpectating);
 
 	const bookId = $derived($page.params.id);
-	const book = $derived($books.find((b) => b.id === bookId));
+	const book = $derived(books.items.find((b) => b.id === bookId));
 	
 	// Get annotations for this book (reactive)
-	const bookAnnotations = $derived(book ? $annotations.filter(a => a.bookSha256 === book.sha256) : []);
+	const bookAnnotations = $derived(book ? annotations.items.filter(a => a.bookSha256 === book.sha256) : []);
 
 	// Panel visibility state
 	let showTOC = $state(false);
@@ -309,7 +309,7 @@
 		await annotations.initialize(userPubkey || undefined);
 
 		// Re-check for book after initialization
-		const currentBooks = $books;
+		const currentBooks = books.items;
 		const foundBook = currentBooks.find((b) => b.id === bookId);
 		
 		if (!foundBook) {
@@ -369,7 +369,7 @@
 			}
 
 			// Load existing annotations as highlights
-			const currentAnnotations = $annotations.filter(a => a.bookSha256 === foundBook.sha256);
+			const currentAnnotations = annotations.items.filter(a => a.bookSha256 === foundBook.sha256);
 			if (currentAnnotations.length > 0) {
 				epubService.loadAnnotations(currentAnnotations);
 			}

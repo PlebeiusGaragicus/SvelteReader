@@ -25,6 +25,31 @@ export interface Project {
 }
 
 // =============================================================================
+// TOOL CALL TYPES
+// =============================================================================
+
+export interface ToolCall {
+	id: string;
+	name: string;
+	args: Record<string, unknown>;
+	type?: 'tool_call';
+}
+
+export interface ToolResult {
+	tool_call_id: string;
+	name: string;
+	content: string;
+	error?: string;
+}
+
+export type ToolExecutionStatus = 'pending' | 'executing' | 'completed' | 'error';
+
+export interface ToolCallWithStatus extends ToolCall {
+	status: ToolExecutionStatus;
+	result?: ToolResult;
+}
+
+// =============================================================================
 // THREAD TYPES
 // =============================================================================
 
@@ -49,33 +74,8 @@ export interface Message {
 	threadId: string;
 	role: 'user' | 'assistant' | 'system';
 	content: string;
-	toolCalls?: ToolCall[];
+	toolCalls?: ToolCallWithStatus[];
 	createdAt: number;
-}
-
-// =============================================================================
-// TOOL CALL TYPES
-// =============================================================================
-
-export interface ToolCall {
-	id: string;
-	name: string;
-	args: Record<string, unknown>;
-	type?: 'tool_call';
-}
-
-export interface ToolResult {
-	tool_call_id: string;
-	name: string;
-	content: string;
-	error?: string;
-}
-
-export type ToolExecutionStatus = 'pending' | 'executing' | 'completed' | 'error';
-
-export interface ToolCallWithStatus extends ToolCall {
-	status: ToolExecutionStatus;
-	result?: ToolResult;
 }
 
 // =============================================================================

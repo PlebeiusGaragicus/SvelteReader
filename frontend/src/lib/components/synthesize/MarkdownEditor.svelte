@@ -1,11 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from '@codemirror/view';
-	import { EditorState, Compartment } from '@codemirror/state';
-	import { markdown } from '@codemirror/lang-markdown';
-	import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-	import { oneDark } from '@codemirror/theme-one-dark';
-	import { MarkdownRenderer } from '$lib/components/chat';
+	import { browser } from '$app/environment';
+	import type { EditorView as EditorViewType } from '@codemirror/view';
 
 	interface Props {
 		content: string;
@@ -17,178 +13,195 @@
 	let { content, readonly = false, onContentChange, onSave }: Props = $props();
 
 	let editorContainer = $state<HTMLDivElement | undefined>(undefined);
-	let editorView = $state<EditorView | undefined>(undefined);
-	let mode = $state<'edit' | 'preview'>('edit');
+	let editorView = $state<EditorViewType | undefined>(undefined);
+	let isEditorReady = $state(false);
+	let cmModules = $state<{
+		EditorView: typeof EditorViewType;
+		EditorState: typeof import('@codemirror/state').EditorState;
+		keymap: typeof import('@codemirror/view').keymap;
+		highlightActiveLine: typeof import('@codemirror/view').highlightActiveLine;
+		markdown: typeof import('@codemirror/lang-markdown').markdown;
+		languages: typeof import('@codemirror/language-data').languages;
+		oneDark: typeof import('@codemirror/theme-one-dark').oneDark;
+		defaultKeymap: typeof import('@codemirror/commands').defaultKeymap;
+		history: typeof import('@codemirror/commands').history;
+		historyKeymap: typeof import('@codemirror/commands').historyKeymap;
+		livePreview: typeof import('$lib/codemirror/livePreview').livePreview;
+	} | null>(null);
 
-	const readOnlyCompartment = new Compartment();
+	// Custom theme to match our dark UI with prose-like styling
+	function createEditorTheme(EditorView: typeof EditorViewType) {
+		return EditorView.theme(
+			{
+				'&': {
+					height: '100%',
+					fontSize: '16px',
+					fontFamily: "'Inter', system-ui, sans-serif",
+					backgroundColor: '#0a0a0a'
+				},
+				'.cm-content': {
+					padding: '16px 24px',
+					caretColor: '#a78bfa',
+					lineHeight: '1.75'
+				},
+				'.cm-cursor': {
+					borderLeftColor: '#a78bfa',
+					borderLeftWidth: '2px'
+				},
+				'.cm-activeLine': {
+					backgroundColor: 'rgba(24, 24, 27, 0.8)'
+				},
+				'.cm-line': {
+					padding: '0 8px'
+				},
+				'.cm-scroller': {
+					overflow: 'auto',
+					fontFamily: "'Inter', system-ui, sans-serif"
+				},
+				'.cm-selectionBackground': {
+					backgroundColor: 'rgba(167, 139, 250, 0.2) !important'
+				}
+			},
+			{ dark: true }
+		);
+	}
 
-	// Custom theme to match our dark UI
-	const customTheme = EditorView.theme({
-		'&': {
-			height: '100%',
-			fontSize: '14px',
-			backgroundColor: 'transparent'
-		},
-		'.cm-content': {
-			fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-			padding: '16px',
-			caretColor: '#a78bfa'
-		},
-		'.cm-cursor': {
-			borderLeftColor: '#a78bfa'
-		},
-		'.cm-activeLine': {
-			backgroundColor: 'rgba(255, 255, 255, 0.03)'
-		},
-		'.cm-selectionBackground': {
-			backgroundColor: 'rgba(167, 139, 250, 0.2) !important'
-		},
-		'.cm-gutters': {
-			backgroundColor: 'transparent',
-			borderRight: '1px solid #27272a',
-			color: '#52525b'
-		},
-		'.cm-activeLineGutter': {
-			backgroundColor: 'transparent',
-			color: '#a1a1aa'
-		},
-		'.cm-scroller': {
-			overflow: 'auto'
+	// Load CodeMirror modules dynamically (client-side only)
+	onMount(async () => {
+		if (!browser) return;
+
+		const [view, state, markdown, langData, theme, commands, livePreviewModule] = await Promise.all(
+			[
+				import('@codemirror/view'),
+				import('@codemirror/state'),
+				import('@codemirror/lang-markdown'),
+				import('@codemirror/language-data'),
+				import('@codemirror/theme-one-dark'),
+				import('@codemirror/commands'),
+				import('$lib/codemirror/livePreview')
+			]
+		);
+
+		cmModules = {
+			EditorView: view.EditorView,
+			EditorState: state.EditorState,
+			keymap: view.keymap,
+			highlightActiveLine: view.highlightActiveLine,
+			markdown: markdown.markdown,
+			languages: langData.languages,
+			oneDark: theme.oneDark,
+			defaultKeymap: commands.defaultKeymap,
+			history: commands.history,
+			historyKeymap: commands.historyKeymap,
+			livePreview: livePreviewModule.livePreview
+		};
+
+		isEditorReady = true;
+	});
+
+	// Create/update editor when container and modules are ready
+	$effect(() => {
+		if (!browser || !isEditorReady || !cmModules || !editorContainer) return;
+
+		const {
+			EditorView,
+			EditorState,
+			keymap,
+			highlightActiveLine,
+			markdown,
+			languages,
+			oneDark,
+			defaultKeymap,
+			history,
+			historyKeymap,
+			livePreview
+		} = cmModules;
+
+		// Create save keymap
+		const saveKeymap = keymap.of([
+			{
+				key: 'Mod-s',
+				run: () => {
+					onSave?.();
+					return true;
+				}
+			}
+		]);
+
+		if (!editorView) {
+			// Create new editor
+			editorView = new EditorView({
+				state: EditorState.create({
+					doc: content,
+					extensions: [
+						highlightActiveLine(),
+						history(),
+						markdown({ codeLanguages: languages }),
+						// historyKeymap MUST come before defaultKeymap for undo/redo to work
+						keymap.of([...historyKeymap, ...defaultKeymap]),
+						saveKeymap,
+						oneDark,
+						createEditorTheme(EditorView),
+						livePreview,
+						EditorView.lineWrapping,
+						EditorState.readOnly.of(readonly),
+						EditorView.updateListener.of((update) => {
+							if (update.docChanged) {
+								onContentChange?.(update.state.doc.toString());
+							}
+						})
+					]
+				}),
+				parent: editorContainer
+			});
 		}
 	});
 
-	// Save keyboard shortcut
-	const saveKeymap = keymap.of([
-		{
-			key: 'Mod-s',
-			run: () => {
-				onSave?.();
-				return true;
-			}
-		}
-	]);
-
-	function createEditor() {
-		if (!editorContainer) return;
-
-		const state = EditorState.create({
-			doc: content,
-			extensions: [
-				lineNumbers(),
-				highlightActiveLine(),
-				drawSelection(),
-				history(),
-				markdown(),
-				keymap.of([...defaultKeymap, ...historyKeymap]),
-				saveKeymap,
-				oneDark,
-				customTheme,
-				readOnlyCompartment.of(EditorState.readOnly.of(readonly)),
-				EditorView.updateListener.of((update) => {
-					if (update.docChanged) {
-						const newContent = update.state.doc.toString();
-						onContentChange?.(newContent);
-					}
-				})
-			]
-		});
-
-		editorView = new EditorView({
-			state,
-			parent: editorContainer
-		});
-	}
-
-	function destroyEditor() {
-		editorView?.destroy();
-		editorView = undefined;
-	}
-
-	// Sync content from props to editor
+	// Sync content from props to editor (when content changes externally)
 	$effect(() => {
 		if (editorView && content !== editorView.state.doc.toString()) {
-			editorView.dispatch({
-				changes: {
-					from: 0,
-					to: editorView.state.doc.length,
-					insert: content
-				}
-			});
-		}
-	});
-
-	// Sync readonly state
-	$effect(() => {
-		if (editorView) {
-			editorView.dispatch({
-				effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(readonly))
-			});
-		}
-	});
-
-	onMount(() => {
-		if (mode === 'edit') {
-			createEditor();
+			const currentContent = editorView.state.doc.toString();
+			// Only update if actually different (avoid loops)
+			if (content.trim() !== currentContent.trim()) {
+				editorView.dispatch({
+					changes: {
+						from: 0,
+						to: editorView.state.doc.length,
+						insert: content
+					}
+				});
+			}
 		}
 	});
 
 	onDestroy(() => {
-		destroyEditor();
+		editorView?.destroy();
+		editorView = undefined;
 	});
-
-	function toggleMode() {
-		if (mode === 'edit') {
-			mode = 'preview';
-			destroyEditor();
-		} else {
-			mode = 'edit';
-			// Wait for DOM to update before creating editor
-			requestAnimationFrame(() => createEditor());
-		}
-	}
 </script>
 
-<div class="flex h-full flex-col">
-	<!-- Toolbar -->
-	<div class="flex items-center justify-between border-b border-zinc-800 px-3 py-1.5">
-		<div class="flex gap-1">
-			<button
-				onclick={() => mode !== 'edit' && toggleMode()}
-				class="rounded px-2.5 py-1 text-xs font-medium transition-colors {mode === 'edit'
-					? 'bg-zinc-700 text-zinc-100'
-					: 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'}"
-			>
-				Edit
-			</button>
-			<button
-				onclick={() => mode !== 'preview' && toggleMode()}
-				class="rounded px-2.5 py-1 text-xs font-medium transition-colors {mode === 'preview'
-					? 'bg-zinc-700 text-zinc-100'
-					: 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'}"
-			>
-				Preview
-			</button>
-		</div>
-
-		{#if !readonly && onSave}
-			<button
-				onclick={onSave}
-				class="rounded px-2.5 py-1 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-300"
-			>
-				Save
-			</button>
-		{/if}
-	</div>
-
-	<!-- Content -->
-	<div class="flex-1 overflow-hidden">
-		{#if mode === 'edit'}
-			<div bind:this={editorContainer} class="h-full w-full bg-zinc-900"></div>
-		{:else}
-			<div class="prose prose-invert prose-sm h-full max-w-none overflow-y-auto p-4">
-				<MarkdownRenderer {content} />
+<div class="h-full w-full">
+	{#if !isEditorReady}
+		<div class="flex h-full items-center justify-center bg-zinc-950 text-zinc-500">
+			<div class="text-center">
+				<div
+					class="mx-auto mb-2 h-6 w-6 animate-spin rounded-full border-2 border-zinc-600 border-t-violet-500"
+				></div>
+				<p class="text-sm">Loading editor...</p>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{:else}
+		<div bind:this={editorContainer} class="h-full w-full overflow-hidden bg-zinc-950"></div>
+	{/if}
 </div>
 
+<style>
+	:global(.cm-editor) {
+		height: 100%;
+		background-color: #0a0a0a;
+	}
+	:global(.cm-scroller) {
+		font-family: 'Inter', system-ui, sans-serif;
+		overflow: auto !important;
+	}
+</style>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Upload, Loader2 } from '@lucide/svelte';
-	import { books } from '$lib/stores/books';
+	import { books } from '$lib/stores/books.svelte';
 	import { storeEpubData, computeSha256, getBookBySha256, getBookBySha256ForOwner } from '$lib/services/storageService';
 	import { epubService } from '$lib/services/epubService';
 	import { AppError, type BookIdentity } from '$lib/types';

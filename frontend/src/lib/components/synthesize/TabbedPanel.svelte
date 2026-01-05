@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { X, MessageSquare, FileText, Link, PanelRightClose } from '@lucide/svelte';
 	import {
 		synthArtifactStore,
@@ -17,6 +18,9 @@
 		onTabClose: (id: string) => void;
 		showClosePanel?: boolean;
 		onClosePanel?: () => void;
+		thread?: Snippet<[{ activeTabId: string }]>;
+		artifact?: Snippet<[{ activeTabId: string }]>;
+		source?: Snippet<[{ activeTabId: string }]>;
 	}
 
 	let {
@@ -26,21 +30,24 @@
 		onTabSelect,
 		onTabClose,
 		showClosePanel = false,
-		onClosePanel
+		onClosePanel,
+		thread,
+		artifact,
+		source
 	}: Props = $props();
 
 	function getTabTitle(tab: TabItem): string {
 		if (tab.type === 'artifact') {
-			const artifact = synthArtifactStore.artifacts.find((a) => a.id === tab.id);
-			if (artifact) {
-				return artifact.versions[artifact.currentVersionIndex]?.title || 'Untitled';
+			const art = synthArtifactStore.artifacts.find((a) => a.id === tab.id);
+			if (art) {
+				return art.versions[art.currentVersionIndex]?.title || 'Untitled';
 			}
 		} else if (tab.type === 'thread') {
-			const thread = synthThreadStore.threads.find((t) => t.id === tab.id);
-			return thread?.title || 'Chat';
+			const thr = synthThreadStore.threads.find((t) => t.id === tab.id);
+			return thr?.title || 'Chat';
 		} else if (tab.type === 'source') {
-			const source = synthSourceStore.sources.find((s) => s.id === tab.id);
-			return source?.title || 'Source';
+			const src = synthSourceStore.sources.find((s) => s.id === tab.id);
+			return src?.title || 'Source';
 		}
 		return 'Unknown';
 	}
@@ -66,8 +73,9 @@
 
 <div class="flex h-full flex-col bg-zinc-950">
 	<!-- Tab bar -->
-	<div class="flex h-10 items-center gap-1 border-b border-zinc-800 bg-zinc-900/50 px-2">
-		<div class="flex flex-1 gap-1 overflow-x-auto">
+	<div class="flex h-10 items-center border-b border-zinc-800 bg-zinc-900/50">
+		<!-- Tabs and + button grouped together, scrolling if needed -->
+		<div class="flex flex-1 items-center gap-0.5 overflow-x-auto px-1">
 			{#each tabs as tab (tab.id)}
 				{@const TabIcon = getTabIcon(tab.type)}
 				<div
@@ -76,7 +84,7 @@
 					role="tab"
 					tabindex="0"
 					aria-selected={activeTabId === tab.id}
-					class="group flex cursor-pointer items-center gap-1.5 rounded-t-lg px-3 py-1.5 text-sm transition-colors {activeTabId ===
+					class="group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg px-3 py-1.5 text-sm transition-colors {activeTabId ===
 					tab.id
 						? 'bg-zinc-800 text-zinc-100'
 						: 'text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300'}"
@@ -91,15 +99,16 @@
 					</button>
 				</div>
 			{/each}
+
+			<!-- New tab button - positioned right after last tab -->
+			<NewTabMenu {column} />
 		</div>
 
-		<!-- New tab button -->
-		<NewTabMenu {column} />
-
+		<!-- Close panel button stays on the right -->
 		{#if showClosePanel && onClosePanel}
 			<button
 				onclick={onClosePanel}
-				class="rounded p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+				class="shrink-0 border-l border-zinc-800 px-3 py-2 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
 				title="Close panel"
 			>
 				<PanelRightClose class="h-4 w-4" />
@@ -117,18 +126,14 @@
 		{:else if activeTabId}
 			{@const activeTab = tabs.find((t) => t.id === activeTabId)}
 			{#if activeTab}
-				{#if activeTab.type === 'thread'}
-					<!-- Thread/Chat content will be rendered here -->
-					<slot name="thread" {activeTabId} />
-				{:else if activeTab.type === 'artifact'}
-					<!-- File editor content will be rendered here -->
-					<slot name="artifact" {activeTabId} />
-				{:else if activeTab.type === 'source'}
-					<!-- Source viewer content will be rendered here -->
-					<slot name="source" {activeTabId} />
+				{#if activeTab.type === 'thread' && thread}
+					{@render thread({ activeTabId })}
+				{:else if activeTab.type === 'artifact' && artifact}
+					{@render artifact({ activeTabId })}
+				{:else if activeTab.type === 'source' && source}
+					{@render source({ activeTabId })}
 				{/if}
 			{/if}
 		{/if}
 	</div>
 </div>
-

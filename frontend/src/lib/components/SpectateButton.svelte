@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { Eye, X, RefreshCw, Trash2, Settings, History, ChevronLeft, Copy, Check } from '@lucide/svelte';
-	import { get } from 'svelte/store';
 	import { spectateStore, type SpectateHistoryEntry } from '$lib/stores/spectate.svelte';
 	import { fetchRemoteUserData } from '$lib/services/nostrService';
 	import { deleteDataByOwner } from '$lib/services/storageService';
 	import { getDefaultRelays } from '$lib/types/nostr';
-	import { books } from '$lib/stores/books';
-	import { annotations } from '$lib/stores/annotations';
+	import { books } from '$lib/stores/books.svelte';
+	import { annotations } from '$lib/stores/annotations.svelte';
 	import { decodeNpub } from '$lib/utils/nostr';
 	
 	// UI state
@@ -231,7 +230,7 @@
 		await books.initialize(hexPubkey);
 		await annotations.initialize(hexPubkey);
 		
-		const existingBooks = get(books);
+		const existingBooks = books.items;
 		if (existingBooks.length > 0) {
 			// Use local data
 			console.log(`[Spectate] Found ${existingBooks.length} local books for ${hexPubkey.slice(0, 8)}, using local data`);

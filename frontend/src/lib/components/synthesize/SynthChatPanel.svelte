@@ -409,7 +409,7 @@
 						</button>
 					{:else if isStreaming}
 						<button
-							onclick={() => synthAgentStore.stopStreaming(effectiveThreadId)}
+							onclick={() => effectiveThreadId && synthAgentStore.stopStreaming(effectiveThreadId)}
 							disabled={!effectiveThreadId}
 							type="button"
 							class="rounded-xl bg-red-600 p-3 text-white transition-colors hover:bg-red-500 disabled:opacity-50"

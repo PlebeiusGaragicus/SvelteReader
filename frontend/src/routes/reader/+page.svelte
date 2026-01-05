@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { books, type Book } from '$lib/stores/books';
-	import { annotations } from '$lib/stores/annotations';
+	import { books, type Book } from '$lib/stores/books.svelte';
+	import { annotations } from '$lib/stores/annotations.svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { modeStore } from '$lib/stores/mode.svelte';
@@ -54,7 +54,7 @@
 		if (cyphertap.isLoggedIn && !spectateStore.isSpectating) {
 			const others = await books.getOtherBooksWithEpub();
 			// Filter out books that current user already has (by sha256)
-			const myBookHashes = new Set($books.map(b => b.sha256));
+			const myBookHashes = new Set(books.items.map(b => b.sha256));
 			otherBooks = others.filter(b => !myBookHashes.has(b.sha256));
 		} else {
 			otherBooks = [];
@@ -63,7 +63,7 @@
 	
 	// Reload other books when user's books change or login state changes
 	$effect(() => {
-		const _ = $books; // Track changes to user's books
+		const _ = books.items; // Track changes to user's books
 		const __ = cyphertap.isLoggedIn;
 		const ___ = spectateStore.isSpectating;
 		loadOtherBooks();
@@ -145,7 +145,7 @@
 				</p>
 			</div>
 		</div>
-	{:else if $books.length === 0 && otherBooks.length === 0}
+	{:else if books.items.length === 0 && otherBooks.length === 0}
 		<div class="flex flex-col items-center justify-center py-20 text-center">
 			{#if spectateStore.isSpectating}
 				<Binoculars class="mb-4 h-20 w-20 text-blue-400" />
@@ -179,9 +179,9 @@
 		</div>
 		
 		<!-- My Library Section -->
-		{#if $books.length > 0}
+		{#if books.items.length > 0}
 			<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-				{#each $books as book (book.id)}
+				{#each books.items as book (book.id)}
 					<BookCard {book} />
 				{/each}
 			</div>

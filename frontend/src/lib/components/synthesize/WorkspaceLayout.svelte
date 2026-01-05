@@ -178,13 +178,13 @@
 				onTabSelect={(id) => handleTabSelect(id, 'left')}
 				onTabClose={(id) => handleTabClose(id, 'left')}
 			>
-				{#snippet thread(props)}
+				{#snippet thread(props: { activeTabId: string })}
 					<SynthChatPanel threadId={props.activeTabId} />
 				{/snippet}
-				{#snippet artifact(props)}
+				{#snippet artifact(props: { activeTabId: string })}
 					<FileEditor artifactId={props.activeTabId} />
 				{/snippet}
-				{#snippet source(props)}
+				{#snippet source(props: { activeTabId: string })}
 					<SourceViewer sourceId={props.activeTabId} />
 				{/snippet}
 			</TabbedPanel>
@@ -212,13 +212,13 @@
 					showClosePanel={true}
 					onClosePanel={() => synthWorkspaceStore.collapseRightPanel()}
 				>
-					{#snippet thread(props)}
+					{#snippet thread(props: { activeTabId: string })}
 						<SynthChatPanel threadId={props.activeTabId} />
 					{/snippet}
-					{#snippet artifact(props)}
+					{#snippet artifact(props: { activeTabId: string })}
 						<FileEditor artifactId={props.activeTabId} />
 					{/snippet}
-					{#snippet source(props)}
+					{#snippet source(props: { activeTabId: string })}
 						<SourceViewer sourceId={props.activeTabId} />
 					{/snippet}
 				</TabbedPanel>

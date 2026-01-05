@@ -1,4 +1,9 @@
-import { writable, get } from 'svelte/store';
+/**
+ * Books Store - Reactive store for book library using Svelte 5 runes
+ * 
+ * Manages the user's book collection with IndexedDB persistence and Nostr sync.
+ */
+
 import { browser } from '$app/environment';
 import {
 	removeEpubData,
@@ -19,12 +24,12 @@ import type { FetchedBook } from './sync.svelte';
 // Re-export types for backward compatibility
 export type { Book } from '$lib/types';
 
-// In-memory store for books
-const { subscribe, set, update } = writable<Book[]>([]);
+// Reactive state using Svelte 5 runes
+let booksState = $state<Book[]>([]);
 
 // Track if store has been initialized from IndexedDB
-let initialized = false;
-let currentOwnerPubkey: string | null = null;
+let initialized = $state(false);
+let currentOwnerPubkey = $state<string | null>(null);
 
 // CypherTap instance for Nostr publishing
 let cyphertapInstance: CyphertapPublisher | null = null;
@@ -39,12 +44,12 @@ async function initializeStore(ownerPubkey?: string): Promise<void> {
 	try {
 		currentOwnerPubkey = ownerPubkey || null;
 		if (ownerPubkey) {
-			const books = await getAllBooks(ownerPubkey);
-			set(books);
-			console.log(`[Books] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${books.length} books`);
+			const loadedBooks = await getAllBooks(ownerPubkey);
+			booksState = loadedBooks;
+			console.log(`[Books] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${loadedBooks.length} books`);
 		} else {
 			// No user logged in - empty library
-			set([]);
+			booksState = [];
 			console.log('[Books] No user logged in, library empty');
 		}
 		initialized = true;
@@ -73,7 +78,7 @@ async function addBook(book: Omit<Book, 'id' | 'ownerPubkey'>): Promise<string> 
 	
 	await storeBook(newBook);
 	
-	update(books => [...books, newBook]);
+	booksState = [...booksState, newBook];
 	
 	return id;
 }
@@ -82,8 +87,7 @@ async function addBook(book: Omit<Book, 'id' | 'ownerPubkey'>): Promise<string> 
 async function removeBook(id: string, deleteAnnotations: boolean = false): Promise<void> {
 	await ensureInitialized();
 	
-	const currentBooks = get({ subscribe });
-	const book = currentBooks.find(b => b.id === id);
+	const book = booksState.find(b => b.id === id);
 	
 	if (!book) return;
 	
@@ -94,7 +98,7 @@ async function removeBook(id: string, deleteAnnotations: boolean = false): Promi
 		// Delete annotations and book completely
 		await deleteAnnotationsByBook(book.sha256);
 		await deleteBookFromDB(id);
-		update(books => books.filter(b => b.id !== id));
+		booksState = booksState.filter(b => b.id !== id);
 	} else {
 		// Check if there are annotations for this book
 		const annotations = await getAnnotationsByBook(book.sha256);
@@ -106,11 +110,11 @@ async function removeBook(id: string, deleteAnnotations: boolean = false): Promi
 				hasEpubData: false
 			};
 			await storeBook(ghostBook);
-			update(books => books.map(b => b.id === id ? ghostBook : b));
+			booksState = booksState.map(b => b.id === id ? ghostBook : b);
 		} else {
 			// No annotations, delete completely
 			await deleteBookFromDB(id);
-			update(books => books.filter(b => b.id !== id));
+			booksState = booksState.filter(b => b.id !== id);
 		}
 	}
 }
@@ -119,8 +123,7 @@ async function removeBook(id: string, deleteAnnotations: boolean = false): Promi
 async function updateProgress(id: string, currentPage: number, currentCfi?: string, totalPages?: number): Promise<void> {
 	await ensureInitialized();
 	
-	const currentBooks = get({ subscribe });
-	const book = currentBooks.find(b => b.id === id);
+	const book = booksState.find(b => b.id === id);
 	
 	if (!book) return;
 	
@@ -137,15 +140,14 @@ async function updateProgress(id: string, currentPage: number, currentCfi?: stri
 	
 	await storeBook(updatedBook);
 	
-	update(books => books.map(b => b.id === id ? updatedBook : b));
+	booksState = booksState.map(b => b.id === id ? updatedBook : b);
 }
 
 // Update book metadata
 async function updateBook(id: string, updates: Partial<Omit<Book, 'id' | 'sha256'>>): Promise<void> {
 	await ensureInitialized();
 	
-	const currentBooks = get({ subscribe });
-	const book = currentBooks.find(b => b.id === id);
+	const book = booksState.find(b => b.id === id);
 	
 	if (!book) return;
 	
@@ -153,21 +155,19 @@ async function updateBook(id: string, updates: Partial<Omit<Book, 'id' | 'sha256
 	
 	await storeBook(updatedBook);
 	
-	update(books => books.map(b => b.id === id ? updatedBook : b));
+	booksState = booksState.map(b => b.id === id ? updatedBook : b);
 }
 
 // Get a book by ID
 async function getBookById(id: string): Promise<Book | null> {
 	await ensureInitialized();
 	
-	const currentBooks = get({ subscribe });
-	return currentBooks.find(b => b.id === id) ?? null;
+	return booksState.find(b => b.id === id) ?? null;
 }
 
 // Get a book by SHA-256
 function getBookBySha256(sha256: string): Book | null {
-	const currentBooks = get({ subscribe });
-	return currentBooks.find(b => b.sha256 === sha256) ?? null;
+	return booksState.find(b => b.sha256 === sha256) ?? null;
 }
 
 // Set CypherTap instance for Nostr publishing
@@ -179,8 +179,7 @@ function setCyphertap(cyphertap: CyphertapPublisher | null): void {
 async function publishBook(id: string): Promise<{ success: boolean; error?: string }> {
 	await ensureInitialized();
 	
-	const currentBooks = get({ subscribe });
-	const book = currentBooks.find(b => b.id === id);
+	const book = booksState.find(b => b.id === id);
 	
 	if (!book) {
 		return { success: false, error: 'Book not found' };
@@ -213,7 +212,7 @@ async function publishBook(id: string): Promise<{ success: boolean; error?: stri
 		};
 		
 		await storeBook(updatedBook);
-		update(books => books.map(b => b.id === id ? updatedBook : b));
+		booksState = booksState.map(b => b.id === id ? updatedBook : b);
 		
 		return { success: true };
 	}
@@ -227,12 +226,11 @@ async function mergeFromNostr(remoteBooks: FetchedBook[]): Promise<{ merged: num
 	
 	let merged = 0;
 	let ghostsCreated = 0;
-	const currentBooks = get({ subscribe });
 	
 	console.log(`[Books] Merging ${remoteBooks.length} remote books...`);
 	
 	for (const remote of remoteBooks) {
-		const local = currentBooks.find(b => b.sha256 === remote.sha256);
+		const local = booksState.find(b => b.sha256 === remote.sha256);
 		
 		if (!local) {
 			// New book from Nostr - create ghost book
@@ -262,7 +260,7 @@ async function mergeFromNostr(remoteBooks: FetchedBook[]): Promise<{ merged: num
 			};
 			
 			await storeBook(ghostBook);
-			update(books => [...books, ghostBook]);
+			booksState = [...booksState, ghostBook];
 			ghostsCreated++;
 			merged++;
 		} else {
@@ -288,7 +286,7 @@ async function mergeFromNostr(remoteBooks: FetchedBook[]): Promise<{ merged: num
 				};
 				
 				await storeBook(updatedBook);
-				update(books => books.map(b => b.sha256 === remote.sha256 ? updatedBook : b));
+				booksState = booksState.map(b => b.sha256 === remote.sha256 ? updatedBook : b);
 				merged++;
 			} else {
 				// Local is newer or same - keep local
@@ -303,7 +301,7 @@ async function mergeFromNostr(remoteBooks: FetchedBook[]): Promise<{ merged: num
 
 // Reset store (for testing/clearing data)
 function reset(): void {
-	set([]);
+	booksState = [];
 	initialized = false;
 }
 
@@ -352,7 +350,7 @@ async function adoptBook(sourceBook: Book): Promise<string> {
 	};
 	
 	await storeBook(newBook);
-	update(books => [...books, newBook]);
+	booksState = [...booksState, newBook];
 	
 	return id;
 }
@@ -362,8 +360,12 @@ function getCurrentOwner(): string | null {
 	return currentOwnerPubkey;
 }
 
+// Export reactive getters and actions
 export const books = {
-	subscribe,
+	// Reactive getter for the books array
+	get items() { return booksState; },
+	
+	// Actions
 	initialize: initializeStore,
 	add: addBook,
 	remove: removeBook,
@@ -380,3 +382,4 @@ export const books = {
 	adoptBook,
 	getCurrentOwner
 };
+

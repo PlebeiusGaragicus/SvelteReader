@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { X, Upload, Globe, Lock, Loader2 } from '@lucide/svelte';
-	import { books } from '$lib/stores/books';
 	import type { BookIdentity } from '$lib/types';
 
 	interface Props {
