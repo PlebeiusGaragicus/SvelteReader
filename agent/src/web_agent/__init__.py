@@ -5,7 +5,6 @@ It uses tools to search the web and scrape URLs, then synthesizes
 answers with citations.
 """
 
-from web_agent.graph import graph
+from src.web_agent.graph import graph
 
 __all__ = ["graph"]
-

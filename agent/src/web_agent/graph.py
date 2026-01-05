@@ -23,8 +23,8 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from web_agent.prompts import SYSTEM_PROMPT
-from web_agent.tools import WEB_TOOLS
+from src.web_agent.prompts import SYSTEM_PROMPT
+from src.web_agent.tools import WEB_TOOLS
 
 
 # =============================================================================
@@ -195,4 +195,3 @@ builder.add_edge("tools", "agent")
 
 # Compile the graph
 graph = builder.compile()
-
