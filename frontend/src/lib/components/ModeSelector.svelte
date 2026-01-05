@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Popover } from 'bits-ui';
-	import { BookOpen, Globe, ChevronDown, Check, Sparkles } from '@lucide/svelte';
+	import { BookOpen, Globe, ChevronDown, Check, Sparkles, FlaskConical } from '@lucide/svelte';
 	import { modeStore, type AppMode } from '$lib/stores/mode.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
@@ -10,7 +10,8 @@
 
 	const iconMap: Record<string, Component<{ class?: string }>> = {
 		BookOpen,
-		Globe
+		Globe,
+		FlaskConical
 	};
 
 	// Check if we're on the home page

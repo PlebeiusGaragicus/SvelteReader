@@ -3,7 +3,8 @@
   "dependencies": ["."],
   "graphs": {
     "reader_assistant": "./src/agent/graph.py:graph",
-    "web_agent": "./src/web_agent/graph.py:graph"
+    "web_agent": "./src/web_agent/graph.py:graph",
+    "deepresearch": "./src/deepresearch/graph.py:graph"
   },
   "env": ".env"
 }

@@ -9,7 +9,7 @@ import { browser } from '$app/environment';
 
 const STORAGE_KEY = 'sveltereader-mode';
 
-export type AppMode = 'reader' | 'webscrape';
+export type AppMode = 'reader' | 'webscrape' | 'synthesize';
 
 export interface ModeInfo {
 	id: AppMode;
@@ -33,6 +33,13 @@ export const MODES: ModeInfo[] = [
 		description: 'Search and synthesize from the web',
 		icon: 'Globe',
 		route: '/webscrape'
+	},
+	{
+		id: 'synthesize',
+		name: 'Synthesize',
+		description: 'Deep research and knowledge synthesis',
+		icon: 'FlaskConical',
+		route: '/synthesize'
 	}
 ];
 
@@ -41,7 +48,7 @@ function loadMode(): AppMode {
 	
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
-		if (stored && (stored === 'reader' || stored === 'webscrape')) {
+		if (stored && (stored === 'reader' || stored === 'webscrape' || stored === 'synthesize')) {
 			return stored as AppMode;
 		}
 	} catch (e) {
