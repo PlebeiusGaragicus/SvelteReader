@@ -1,0 +1,81 @@
+# SearXNG configuration for SvelteReader
+# See: https://docs.searxng.org/admin/settings/settings.html
+
+use_default_settings: true
+
+general:
+  instance_name: 'SvelteReader Search'
+  debug: false
+  privacypolicy_url: false
+  contact_url: false
+
+search:
+  # Enable autocomplete
+  autocomplete: 'google'
+  # Default language
+  default_lang: 'en'
+  # Supported output formats
+  formats:
+    - html
+    - json
+
+server:
+  # Secret key - override with SEARXNG_SECRET env var in production
+  secret_key: 'sveltereader-dev-secret-key-change-in-production'
+  # Bind to all interfaces for Docker networking
+  bind_address: '0.0.0.0'
+  port: 8080
+  # Limiter settings
+  limiter: false  # Disable rate limiting for local use
+  real_ip: false  # Don't expect X-Forwarded-For headers from a proxy
+
+ui:
+  # Disable static files (we only use JSON API)
+  static_use_hash: true
+  # Theme
+  default_theme: 'simple'
+  # Results settings
+  results_on_new_tab: false
+
+# Engine configuration
+engines:
+  # Google
+  - name: google
+    disabled: false
+    
+  # Bing
+  - name: bing
+    disabled: false
+    
+  # Bing News
+  - name: bing news
+    disabled: false
+    
+  # Google News
+  - name: google news
+    disabled: false
+    
+  # DuckDuckGo
+  - name: duckduckgo
+    disabled: false
+
+  # Wikipedia
+  - name: wikipedia
+    disabled: false
+
+  # Wolfram Alpha (for calculations)
+  - name: wolframalpha
+    disabled: false
+
+  # Disable engines that require Tor or often fail
+  - name: ahmia
+    disabled: true
+  - name: torch
+    disabled: true
+
+outgoing:
+  # Request timeout
+  request_timeout: 10.0
+  # User agent
+  useragent_suffix: 'SvelteReader'
+

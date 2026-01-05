@@ -3,7 +3,7 @@ name = "svelte-reader-backend"
 version = "0.0.1"
 description = "FastAPI backend for SvelteReader - interfaces with LangGraph agent"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.14",

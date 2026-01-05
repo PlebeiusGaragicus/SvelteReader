@@ -1,0 +1,40 @@
+# SvelteReader Backend Dockerfile
+# FastAPI server for wallet and search operations
+
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies (including build tools for secp256k1)
+RUN apt-get update && apt-get install -y \
+    curl \
+    pkg-config \
+    build-essential \
+    libffi-dev \
+    autoconf \
+    libtool \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy all source files needed for installation
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the application
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

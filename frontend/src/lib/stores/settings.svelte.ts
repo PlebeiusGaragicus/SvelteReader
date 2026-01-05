@@ -3,6 +3,7 @@
  * 
  * Note: Annotation publishing is controlled per-book via book.isPublic.
  * This store handles reader settings (font size, font family, etc.)
+ * and web scrape settings (backend URL, agent URL, etc.)
  */
 
 import { browser } from '$app/environment';
@@ -16,14 +17,24 @@ export interface ReaderSettings {
 	fontFamily: FontFamily;
 }
 
+export interface WebScrapeSettings {
+	backendUrl: string; // FastAPI backend URL (default: http://localhost:8000)
+	agentUrl: string;   // LangGraph agent URL (default: http://localhost:2024)
+}
+
 interface Settings {
 	reader: ReaderSettings;
+	webScrape: WebScrapeSettings;
 }
 
 const DEFAULT_SETTINGS: Settings = {
 	reader: {
 		fontSize: 100,
 		fontFamily: 'original'
+	},
+	webScrape: {
+		backendUrl: 'http://localhost:8000',
+		agentUrl: 'http://localhost:2024'
 	}
 };
 
@@ -37,7 +48,8 @@ function loadSettings(): Settings {
 			return { 
 				...DEFAULT_SETTINGS, 
 				...parsed,
-				reader: { ...DEFAULT_SETTINGS.reader, ...parsed.reader }
+				reader: { ...DEFAULT_SETTINGS.reader, ...parsed.reader },
+				webScrape: { ...DEFAULT_SETTINGS.webScrape, ...parsed.webScrape }
 			};
 		}
 	} catch (e) {
@@ -90,20 +102,39 @@ function createSettingsStore() {
 		saveSettings(settings);
 	}
 
+	// Web Scrape settings
+	function setBackendUrl(url: string): void {
+		settings.webScrape.backendUrl = url;
+		saveSettings(settings);
+	}
+
+	function setAgentUrl(url: string): void {
+		settings.webScrape.agentUrl = url;
+		saveSettings(settings);
+	}
+
 	// Auto-initialize on first access in browser
 	if (browser) {
 		initialize();
 	}
 
 	return {
+		// Reader settings
 		get reader() { return settings.reader; },
 		get fontSize() { return settings.reader.fontSize; },
 		get fontFamily() { return settings.reader.fontFamily; },
+		// Web Scrape settings
+		get webScrape() { return settings.webScrape; },
+		get backendUrl() { return settings.webScrape.backendUrl; },
+		get agentUrl() { return settings.webScrape.agentUrl; },
+		// Methods
 		initialize,
 		setFontSize,
 		setFontFamily,
 		increaseFontSize,
 		decreaseFontSize,
+		setBackendUrl,
+		setAgentUrl,
 		reset,
 	};
 }
