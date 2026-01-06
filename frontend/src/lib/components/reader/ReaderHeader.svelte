@@ -30,7 +30,7 @@
 <header class="flex items-center justify-between border-b border-border px-4 py-2">
 	<div class="flex items-center gap-2">
 		<button
-			onclick={() => goto('/')}
+			onclick={() => goto('/reader')}
 			class="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent"
 			aria-label="Back to library"
 		>

@@ -1,14 +1,17 @@
 /**
- * Web Search History Store - Persists chat threads for the web search feature
+ * Deep Research History Store - Persists research threads with messages and findings
  * 
- * Stores threads with their messages, sources, and metadata to localStorage.
+ * Stores threads with their messages, sources, research brief, and metadata to localStorage.
  * Supports CRUD operations and provides reactive state for the UI.
+ * 
+ * Renamed from webSearchHistory to deepResearchHistory.
  */
 
 import { browser } from '$app/environment';
 
-const STORAGE_KEY = 'sveltereader-websearch-history';
-const MAX_THREADS = 100; // Maximum number of threads to store
+const STORAGE_KEY = 'sveltereader-deepresearch-history';
+const LEGACY_STORAGE_KEY = 'sveltereader-websearch-history';
+const MAX_THREADS = 100;
 
 // =============================================================================
 // TYPES
@@ -30,7 +33,7 @@ export interface SearchSource {
 	snippet?: string;
 }
 
-export interface ChatThread {
+export interface ResearchThread {
 	id: string;
 	title: string;
 	createdAt: string;
@@ -38,49 +41,67 @@ export interface ChatThread {
 	messages: LangGraphMessage[];
 	sources: SearchSource[];
 	suggestions?: string[];
+	// New fields for deep research
+	researchBrief?: string;
+	researchPhase?: 'clarifying' | 'planning' | 'researching' | 'synthesizing' | 'complete';
+	finalReport?: string;
 }
 
-interface WebSearchHistory {
-	threads: ChatThread[];
+// Legacy alias
+export type ChatThread = ResearchThread;
+
+interface DeepResearchHistory {
+	threads: ResearchThread[];
 }
 
 // =============================================================================
 // HELPERS
 // =============================================================================
 
-function loadHistory(): WebSearchHistory {
+function loadHistory(): DeepResearchHistory {
 	if (!browser) return { threads: [] };
 	
 	try {
-		const stored = localStorage.getItem(STORAGE_KEY);
+		// Try new storage key first
+		let stored = localStorage.getItem(STORAGE_KEY);
+		
+		// If not found, migrate from legacy key
+		if (!stored) {
+			stored = localStorage.getItem(LEGACY_STORAGE_KEY);
+			if (stored) {
+				// Migrate to new key
+				localStorage.setItem(STORAGE_KEY, stored);
+				localStorage.removeItem(LEGACY_STORAGE_KEY);
+				console.log('[DeepResearchHistory] Migrated from legacy storage key');
+			}
+		}
+		
 		if (stored) {
 			const parsed = JSON.parse(stored);
 			return { threads: parsed.threads || [] };
 		}
 	} catch (e) {
-		console.error('[WebSearchHistory] Failed to load history:', e);
+		console.error('[DeepResearchHistory] Failed to load history:', e);
 	}
 	return { threads: [] };
 }
 
-function saveHistory(history: WebSearchHistory): void {
+function saveHistory(history: DeepResearchHistory): void {
 	if (!browser) return;
 	
 	try {
-		// Keep only the most recent threads
 		const trimmedHistory = {
 			threads: history.threads.slice(0, MAX_THREADS)
 		};
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmedHistory));
 	} catch (e) {
-		console.error('[WebSearchHistory] Failed to save history:', e);
+		console.error('[DeepResearchHistory] Failed to save history:', e);
 	}
 }
 
 function generateTitle(messages: LangGraphMessage[]): string {
-	// Find the first human message for the title
 	const firstHuman = messages.find(m => m.type === 'human');
-	if (!firstHuman) return 'New Search';
+	if (!firstHuman) return 'New Research';
 	
 	const content = typeof firstHuman.content === 'string' 
 		? firstHuman.content 
@@ -89,7 +110,6 @@ function generateTitle(messages: LangGraphMessage[]): string {
 			.map(c => c.text)
 			.join(' ');
 	
-	// Truncate to reasonable length
 	const maxLength = 60;
 	if (content.length <= maxLength) return content;
 	return content.slice(0, maxLength).trim() + '...';
@@ -99,9 +119,9 @@ function generateTitle(messages: LangGraphMessage[]): string {
 // STORE
 // =============================================================================
 
-function createWebSearchHistoryStore() {
+function createDeepResearchHistoryStore() {
 	let initialized = false;
-	let history = $state<WebSearchHistory>({ threads: [] });
+	let history = $state<DeepResearchHistory>({ threads: [] });
 
 	function initialize(): void {
 		if (initialized || !browser) return;
@@ -116,30 +136,31 @@ function createWebSearchHistoryStore() {
 		threadId: string,
 		messages: LangGraphMessage[],
 		sources?: SearchSource[],
-		suggestions?: string[]
-	): ChatThread {
+		suggestions?: string[],
+		researchBrief?: string,
+		researchPhase?: ResearchThread['researchPhase'],
+	): ResearchThread {
 		const now = new Date().toISOString();
 		
-		// Find existing thread or create new
 		const existingIndex = history.threads.findIndex(t => t.id === threadId);
 		
-		const thread: ChatThread = {
+		const thread: ResearchThread = {
 			id: threadId,
 			title: generateTitle(messages),
 			createdAt: existingIndex >= 0 ? history.threads[existingIndex].createdAt : now,
 			updatedAt: now,
-			messages: [...messages], // Clone to avoid reference issues
+			messages: [...messages],
 			sources: sources ? [...sources] : (existingIndex >= 0 ? history.threads[existingIndex].sources : []),
 			suggestions: suggestions ? [...suggestions] : (existingIndex >= 0 ? history.threads[existingIndex].suggestions : undefined),
+			researchBrief: researchBrief ?? (existingIndex >= 0 ? history.threads[existingIndex].researchBrief : undefined),
+			researchPhase: researchPhase ?? (existingIndex >= 0 ? history.threads[existingIndex].researchPhase : undefined),
 		};
 		
 		if (existingIndex >= 0) {
-			// Update existing thread - create new array to trigger reactivity
 			const newThreads = [...history.threads];
 			newThreads[existingIndex] = thread;
 			history.threads = newThreads;
 		} else {
-			// Add new thread at the beginning
 			history.threads = [thread, ...history.threads];
 		}
 		
@@ -150,7 +171,7 @@ function createWebSearchHistoryStore() {
 	/**
 	 * Get a thread by ID
 	 */
-	function getThread(threadId: string): ChatThread | undefined {
+	function getThread(threadId: string): ResearchThread | undefined {
 		return history.threads.find(t => t.id === threadId);
 	}
 
@@ -187,6 +208,30 @@ function createWebSearchHistoryStore() {
 	}
 
 	/**
+	 * Update research phase
+	 */
+	function updateResearchPhase(threadId: string, phase: ResearchThread['researchPhase']): void {
+		const thread = history.threads.find(t => t.id === threadId);
+		if (thread) {
+			thread.researchPhase = phase;
+			thread.updatedAt = new Date().toISOString();
+			saveHistory(history);
+		}
+	}
+
+	/**
+	 * Update research brief
+	 */
+	function updateResearchBrief(threadId: string, brief: string): void {
+		const thread = history.threads.find(t => t.id === threadId);
+		if (thread) {
+			thread.researchBrief = brief;
+			thread.updatedAt = new Date().toISOString();
+			saveHistory(history);
+		}
+	}
+
+	/**
 	 * Clear all history
 	 */
 	function clearAll(): void {
@@ -194,7 +239,6 @@ function createWebSearchHistoryStore() {
 		saveHistory(history);
 	}
 
-	// Auto-initialize on first access in browser
 	if (browser) {
 		initialize();
 	}
@@ -212,13 +256,22 @@ function createWebSearchHistoryStore() {
 		deleteThread,
 		updateSuggestions,
 		updateSources,
+		updateResearchPhase,
+		updateResearchBrief,
 		clearAll,
 	};
 }
 
-export const webSearchHistoryStore = createWebSearchHistoryStore();
+export const deepResearchHistoryStore = createDeepResearchHistoryStore();
 
-export function useWebSearchHistoryStore() {
-	return webSearchHistoryStore;
+// Legacy alias for backward compatibility
+export const webSearchHistoryStore = deepResearchHistoryStore;
+
+export function useDeepResearchHistoryStore() {
+	return deepResearchHistoryStore;
 }
 
+// Legacy alias
+export function useWebSearchHistoryStore() {
+	return deepResearchHistoryStore;
+}

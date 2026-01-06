@@ -6,10 +6,13 @@
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { modeStore } from '$lib/stores/mode.svelte';
+	import { userFilesStore, type UserFile } from '$lib/stores/userFiles.svelte';
 	import BookCard from '$lib/components/BookCard.svelte';
 	import ImportButton from '$lib/components/ImportButton.svelte';
-	import { BookOpen, Binoculars, FolderOpen, User, LogIn } from '@lucide/svelte';
+	import { FileCard, FileUploadButton, FileEditModal } from '$lib/components/reader';
+	import { BookOpen, Binoculars, FolderOpen, User, LogIn, FileText, ChevronDown, ChevronRight, Search, X, Filter, Upload } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
+	import { toast } from 'svelte-sonner';
 
 	// Helper: Middle-truncate an npub (e.g., "npub1abc...xyz")
 	function truncateNpubMiddle(npub: string, maxLength: number = 24): string {
@@ -35,10 +38,15 @@
 			syncStore.setCyphertap(cyphertap);
 			syncStore.setMergeCallback(annotations.mergeFromNostr);
 			syncStore.setBookMergeCallback(books.mergeFromNostr);
+			// Initialize user files store
+			if (cyphertap.npub) {
+				userFilesStore.initialize(cyphertap.npub);
+			}
 		} else {
 			annotations.setCyphertap(null);
 			books.setCyphertap(null);
 			syncStore.setCyphertap(null);
+			userFilesStore.setNpub(null);
 		}
 	});
 	
@@ -48,6 +56,29 @@
 	// Other books with EPUB data (from other users on this device)
 	let otherBooks = $state<Book[]>([]);
 	let showOtherBooks = $state(false);
+	
+	// My Files section state
+	let showFilesSection = $state(true);
+	let fileSearchQuery = $state('');
+	let fileTypeFilter = $state<'all' | 'pdf' | 'image' | 'text'>('all');
+	
+	// Filtered files based on search and type filter
+	const filteredFiles = $derived.by(() => {
+		let result = userFilesStore.files;
+		
+		// Apply type filter
+		if (fileTypeFilter !== 'all') {
+			result = result.filter(f => f.type === fileTypeFilter);
+		}
+		
+		// Apply search filter
+		if (fileSearchQuery.trim()) {
+			const query = fileSearchQuery.toLowerCase();
+			result = result.filter(f => f.name.toLowerCase().includes(query));
+		}
+		
+		return result;
+	});
 	
 	// Load other books when logged in and not spectating
 	async function loadOtherBooks() {
@@ -71,28 +102,111 @@
 
 	// Drag and drop state
 	let isDragging = $state(false);
+	let dragFileType = $state<'epub' | 'file' | 'unknown'>('unknown');
 	let importButtonRef = $state<ImportButton>();
+	let fileUploadRef = $state<FileUploadButton>();
+
+	// Detect file type from drag event
+	function detectDragFileType(e: DragEvent): 'epub' | 'file' | 'unknown' {
+		const items = e.dataTransfer?.items;
+		if (!items || items.length === 0) return 'unknown';
+		
+		for (const item of Array.from(items)) {
+			if (item.type === 'application/epub+zip') return 'epub';
+			if (item.type === 'application/pdf') return 'file';
+			if (item.type.startsWith('image/')) return 'file';
+			if (item.type.startsWith('text/')) return 'file';
+		}
+		
+		// Check file extension from file name if available
+		const files = e.dataTransfer?.files;
+		if (files && files.length > 0) {
+			const fileName = files[0].name.toLowerCase();
+			if (fileName.endsWith('.epub')) return 'epub';
+			if (fileName.endsWith('.pdf') || fileName.endsWith('.txt') || fileName.endsWith('.md')) return 'file';
+			if (fileName.match(/\.(png|jpg|jpeg|gif|webp)$/)) return 'file';
+		}
+		
+		return 'unknown';
+	}
 
 	function handleDragOver(e: DragEvent) {
 		e.preventDefault();
 		isDragging = true;
+		dragFileType = detectDragFileType(e);
 	}
 
 	function handleDragLeave(e: DragEvent) {
 		// Only set to false if leaving the main container
 		if (e.currentTarget === e.target) {
 			isDragging = false;
+			dragFileType = 'unknown';
 		}
 	}
 
-	function handleDrop(e: DragEvent) {
+	async function handleDrop(e: DragEvent) {
 		e.preventDefault();
 		isDragging = false;
 		
 		const file = e.dataTransfer?.files?.[0];
-		if (file && importButtonRef) {
+		if (!file) return;
+		
+		const fileName = file.name.toLowerCase();
+		const isEpub = fileName.endsWith('.epub') || file.type === 'application/epub+zip';
+		const isFile = file.type === 'application/pdf' || 
+			file.type.startsWith('image/') || 
+			file.type.startsWith('text/') ||
+			fileName.endsWith('.pdf') ||
+			fileName.endsWith('.txt') ||
+			fileName.endsWith('.md') ||
+			fileName.match(/\.(png|jpg|jpeg|gif|webp)$/);
+		
+		if (isEpub && importButtonRef) {
+			// Handle EPUB - use existing import button logic
 			importButtonRef.processFile(file);
+		} else if (isFile && fileUploadRef) {
+			// Handle file - use file upload logic and show edit modal
+			const uploadedFile = await fileUploadRef.processFile(file);
+			if (uploadedFile) {
+				// Show the edit modal for single file drops
+				editingFile = uploadedFile;
+				isNewFileImport = true;
+				showEditModal = true;
+			}
+		} else {
+			toast.error('Unsupported file type', {
+				description: 'Please drop an EPUB, PDF, image, or text file.'
+			});
 		}
+		
+		dragFileType = 'unknown';
+	}
+	
+	// File handlers
+	let editingFile = $state<UserFile | null>(null);
+	let showEditModal = $state(false);
+	let isNewFileImport = $state(false);
+	
+	function handleDeleteFile(file: UserFile) {
+		userFilesStore.deleteFile(file.id);
+	}
+	
+	function handleEditFile(file: UserFile) {
+		editingFile = file;
+		isNewFileImport = false;
+		showEditModal = true;
+	}
+	
+	function handleNewFileImported(file: UserFile) {
+		editingFile = file;
+		isNewFileImport = true;
+		showEditModal = true;
+	}
+	
+	function handleCloseEditModal() {
+		showEditModal = false;
+		editingFile = null;
+		isNewFileImport = false;
 	}
 </script>
 
@@ -163,9 +277,9 @@
 			{/if}
 		</div>
 	{:else}
-		<!-- Header -->
-		<div class="mb-6 flex items-center justify-between">
-			{#if spectateStore.isSpectating && spectateStore.target}
+		{#if spectateStore.isSpectating && spectateStore.target}
+			<!-- Spectating Header -->
+			<div class="mb-6 flex items-center justify-between">
 				<div class="flex items-center gap-3">
 					<Binoculars class="h-6 w-6 text-blue-400" />
 					<div>
@@ -176,51 +290,189 @@
 					</div>
 				</div>
 				<span class="rounded-full bg-blue-500/20 px-3 py-1 text-sm text-blue-400">View Only</span>
+			</div>
+			
+			<!-- Spectating Books Grid -->
+			{#if books.items.length > 0}
+				<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+					{#each books.items as book (book.id)}
+						<BookCard {book} />
+					{/each}
+				</div>
 			{:else}
-				<h1 class="library-header text-2xl font-bold">My Library</h1>
-				<ImportButton bind:this={importButtonRef} />
+				<div class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border rounded-lg">
+					<Binoculars class="mb-4 h-12 w-12 text-muted-foreground" />
+					<p class="text-muted-foreground">This user hasn't published any books yet</p>
+				</div>
 			{/if}
-		</div>
-		
-		<!-- My Library Section -->
-		{#if books.items.length > 0}
-			<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-				{#each books.items as book (book.id)}
-					<BookCard {book} />
-				{/each}
-			</div>
-		{:else if !spectateStore.isSpectating}
-			<div class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border rounded-lg">
-				<BookOpen class="mb-4 h-12 w-12 text-muted-foreground" />
-				<p class="text-muted-foreground">No books in your library yet</p>
-				<p class="text-sm text-muted-foreground mt-1">Import an EPUB or add from available books below</p>
-			</div>
-		{/if}
-		
-		<!-- Available Books Section (other users' books with EPUB data) -->
-		{#if !spectateStore.isSpectating && otherBooks.length > 0}
-			<div class="mt-10">
-				<button
-					onclick={() => showOtherBooks = !showOtherBooks}
-					class="flex items-center gap-2 text-lg font-semibold text-muted-foreground hover:text-foreground transition-colors mb-4"
-				>
-					<FolderOpen class="h-5 w-5" />
-					<span>Available on This Device</span>
-					<span class="text-sm font-normal">({otherBooks.length})</span>
-					<span class="text-xs ml-2">{showOtherBooks ? '▼' : '▶'}</span>
-				</button>
+		{:else}
+			<!-- ======================= MY LIBRARY SECTION ======================= -->
+			<section class="mb-12">
+				<div class="mb-6 flex items-center justify-between">
+					<div class="flex items-center gap-3">
+						<BookOpen class="h-6 w-6 text-cyan-500" />
+						<h1 class="text-2xl font-bold">My Library</h1>
+						{#if books.items.length > 0}
+							<span class="text-sm text-muted-foreground">({books.items.length})</span>
+						{/if}
+					</div>
+					<ImportButton bind:this={importButtonRef} />
+				</div>
 				
-				{#if showOtherBooks}
-					<p class="text-sm text-muted-foreground mb-4">
-						These books have EPUB data stored locally from other accounts. Add them to your library to read.
-					</p>
+				{#if books.items.length > 0}
 					<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-						{#each otherBooks as book (book.id)}
-							<BookCard {book} showAdoptButton={true} onAdopt={() => loadOtherBooks()} />
+						{#each books.items as book (book.id)}
+							<BookCard {book} />
 						{/each}
 					</div>
+				{:else}
+					<div class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border rounded-lg">
+						<BookOpen class="mb-4 h-12 w-12 text-muted-foreground" />
+						<p class="text-muted-foreground">No books in your library yet</p>
+						<p class="text-sm text-muted-foreground mt-1">Import an EPUB or drag and drop a file</p>
+					</div>
 				{/if}
-			</div>
+				
+				<!-- Available Books Section (other users' books with EPUB data) -->
+				{#if otherBooks.length > 0}
+					<div class="mt-8">
+						<button
+							onclick={() => showOtherBooks = !showOtherBooks}
+							class="flex items-center gap-2 text-base font-semibold text-muted-foreground hover:text-foreground transition-colors mb-4"
+						>
+							<FolderOpen class="h-5 w-5" />
+							<span>Available on This Device</span>
+							<span class="text-sm font-normal">({otherBooks.length})</span>
+							{#if showOtherBooks}
+								<ChevronDown class="h-4 w-4" />
+							{:else}
+								<ChevronRight class="h-4 w-4" />
+							{/if}
+						</button>
+						
+						{#if showOtherBooks}
+							<p class="text-sm text-muted-foreground mb-4">
+								These books have EPUB data stored locally from other accounts. Add them to your library to read.
+							</p>
+							<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+								{#each otherBooks as book (book.id)}
+									<BookCard {book} showAdoptButton={true} onAdopt={() => loadOtherBooks()} />
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</section>
+			
+			<!-- ======================= MY FILES SECTION ======================= -->
+			{#if cyphertap.isLoggedIn}
+				<section>
+					<div class="mb-6 flex items-center justify-between">
+						<div class="flex items-center gap-3">
+							<FileText class="h-6 w-6 text-purple-500" />
+							<h1 class="text-2xl font-bold">My Files</h1>
+							{#if userFilesStore.files.length > 0}
+								<span class="text-sm text-muted-foreground">({userFilesStore.files.length})</span>
+							{/if}
+						</div>
+						<FileUploadButton bind:this={fileUploadRef} variant="compact" onFileImported={handleNewFileImported} />
+					</div>
+					
+					<p class="text-sm text-muted-foreground mb-4">
+						PDFs, images, and text files that can be used by Deep Research agents.
+					</p>
+					
+					{#if userFilesStore.files.length === 0}
+						<div class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border rounded-lg">
+							<FileUploadButton onFileImported={handleNewFileImported} />
+						</div>
+					{:else}
+						<!-- Filter and Search Bar -->
+						<div class="flex flex-wrap items-center gap-3 mb-4">
+							<!-- Search -->
+							<div class="relative flex-1 min-w-48 max-w-xs">
+								<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+								<input
+									type="text"
+									bind:value={fileSearchQuery}
+									placeholder="Search files..."
+									class="w-full pl-9 pr-8 py-2 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+								/>
+								{#if fileSearchQuery}
+									<button
+										onclick={() => { fileSearchQuery = ''; }}
+										class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+									>
+										<X class="h-4 w-4" />
+									</button>
+								{/if}
+							</div>
+							
+							<!-- Type Filter -->
+							<div class="flex items-center gap-1 rounded-lg border border-border p-1">
+								<button
+									onclick={() => { fileTypeFilter = 'all'; }}
+									class="px-3 py-1 text-xs font-medium rounded-md transition-colors
+										{fileTypeFilter === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}"
+								>
+									All
+								</button>
+								<button
+									onclick={() => { fileTypeFilter = 'pdf'; }}
+									class="px-3 py-1 text-xs font-medium rounded-md transition-colors
+										{fileTypeFilter === 'pdf' ? 'bg-red-500 text-white' : 'text-muted-foreground hover:bg-muted'}"
+								>
+									PDF
+								</button>
+								<button
+									onclick={() => { fileTypeFilter = 'image'; }}
+									class="px-3 py-1 text-xs font-medium rounded-md transition-colors
+										{fileTypeFilter === 'image' ? 'bg-blue-500 text-white' : 'text-muted-foreground hover:bg-muted'}"
+								>
+									Image
+								</button>
+								<button
+									onclick={() => { fileTypeFilter = 'text'; }}
+									class="px-3 py-1 text-xs font-medium rounded-md transition-colors
+										{fileTypeFilter === 'text' ? 'bg-green-500 text-white' : 'text-muted-foreground hover:bg-muted'}"
+								>
+									Text
+								</button>
+							</div>
+						</div>
+						
+						<!-- Files Grid -->
+						{#if filteredFiles.length === 0}
+							<div class="flex flex-col items-center justify-center py-8 text-center">
+								<Search class="h-8 w-8 text-muted-foreground/50 mb-2" />
+								<p class="text-sm text-muted-foreground">No files match your search</p>
+								<button
+									onclick={() => { fileSearchQuery = ''; fileTypeFilter = 'all'; }}
+									class="mt-2 text-xs text-primary hover:underline"
+								>
+									Clear filters
+								</button>
+							</div>
+						{:else}
+							<div class="grid grid-cols-3 gap-4 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+								{#each filteredFiles as file (file.id)}
+									<FileCard 
+										{file} 
+										onDelete={handleDeleteFile}
+										onEdit={handleEditFile}
+									/>
+								{/each}
+							</div>
+						{/if}
+						
+						{#if userFilesStore.totalSize > 0}
+							<p class="text-xs text-muted-foreground mt-4">
+								{filteredFiles.length} of {userFilesStore.files.length} files • Total: {userFilesStore.formatSize(userFilesStore.totalSize)}
+							</p>
+						{/if}
+					{/if}
+				</section>
+			{/if}
 		{/if}
 	{/if}
 
@@ -228,10 +480,28 @@
 	{#if isDragging}
 		<div class="absolute inset-0 z-50 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-lg pointer-events-none">
 			<div class="text-center">
-				<BookOpen class="mx-auto h-16 w-16 text-primary mb-2" />
-				<p class="text-lg font-medium text-primary">Drop EPUB to import</p>
+				{#if dragFileType === 'epub'}
+					<BookOpen class="mx-auto h-16 w-16 text-cyan-500 mb-2" />
+					<p class="text-lg font-medium text-cyan-500">Drop EPUB to import</p>
+				{:else if dragFileType === 'file'}
+					<FileText class="mx-auto h-16 w-16 text-purple-500 mb-2" />
+					<p class="text-lg font-medium text-purple-500">Drop file to import</p>
+				{:else}
+					<Upload class="mx-auto h-16 w-16 text-primary mb-2" />
+					<p class="text-lg font-medium text-primary">Drop file to import</p>
+					<p class="text-sm text-muted-foreground mt-1">EPUB, PDF, images, or text files</p>
+				{/if}
 			</div>
 		</div>
 	{/if}
 </main>
+
+<!-- File Edit Modal -->
+<FileEditModal
+	file={editingFile}
+	open={showEditModal}
+	onClose={handleCloseEditModal}
+	isNewFile={isNewFileImport}
+/>
+
 

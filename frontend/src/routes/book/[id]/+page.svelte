@@ -675,7 +675,7 @@
 			<p class="text-sm text-muted-foreground">The book data may have been cleared from your browser.</p>
 		{/if}
 		<button
-			onclick={() => goto('/')}
+			onclick={() => goto('/reader')}
 			class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
 		>
 			Back to Library
@@ -736,7 +736,7 @@
 						View Annotations ({bookAnnotations.length})
 					</button>
 					<button
-						onclick={() => goto('/')}
+						onclick={() => goto('/reader')}
 						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
 					>
 						Back to Library

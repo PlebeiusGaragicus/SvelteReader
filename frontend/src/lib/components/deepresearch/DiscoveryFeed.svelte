@@ -3,7 +3,6 @@
 	import { Globe, Loader2 } from '@lucide/svelte';
 	import { createDiscoveryStore, TOPICS, type DiscoveryTopic } from '$lib/services/discoveryService.svelte';
 	import DiscoveryCard from './DiscoveryCard.svelte';
-	import MajorDiscoveryCard from './MajorDiscoveryCard.svelte';
 
 	const discovery = createDiscoveryStore();
 
@@ -43,39 +42,6 @@
 			observer.observe(sentinelRef);
 		}
 	});
-
-	// Helper to chunk items for alternating layout pattern
-	function chunkItems(items: typeof discovery.items) {
-		const chunks: { type: 'major' | 'small-grid'; items: typeof items; startIndex: number }[] = [];
-		let index = 0;
-		let isLeft = false;
-
-		while (index < items.length) {
-			// Add major card
-			if (index < items.length) {
-				chunks.push({ 
-					type: 'major', 
-					items: [{ ...items[index], _isLeft: isLeft }] as any, 
-					startIndex: index 
-				});
-				index++;
-				isLeft = !isLeft;
-			}
-
-			// Add 3 small cards
-			if (index < items.length) {
-				const smallCards = items.slice(index, index + 3);
-				if (smallCards.length > 0) {
-					chunks.push({ type: 'small-grid', items: smallCards, startIndex: index });
-					index += smallCards.length;
-				}
-			}
-		}
-
-		return chunks;
-	}
-
-	const layoutChunks = $derived(chunkItems(discovery.items));
 </script>
 
 <div class="w-full">
@@ -120,37 +86,11 @@
 			<p class="text-muted-foreground">No articles found for this topic</p>
 		</div>
 	{:else}
-		<!-- Mobile layout -->
-		<div class="block lg:hidden">
-			<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-				{#each discovery.items as item (item.id)}
-					<DiscoveryCard {item} />
-				{/each}
-			</div>
-		</div>
-
-		<!-- Desktop layout with alternating pattern -->
-		<div class="hidden lg:block">
-			<div class="flex flex-col gap-6">
-				{#each layoutChunks as chunk, chunkIndex}
-					{#if chunkIndex > 0}
-						<hr class="border-t border-border" />
-					{/if}
-					
-					{#if chunk.type === 'major'}
-						<MajorDiscoveryCard 
-							item={chunk.items[0]} 
-							imagePosition={chunk.startIndex % 2 === 0 ? 'left' : 'right'} 
-						/>
-					{:else}
-						<div class="grid grid-cols-3 gap-4">
-							{#each chunk.items as item (item.id)}
-								<DiscoveryCard {item} />
-							{/each}
-						</div>
-					{/if}
-				{/each}
-			</div>
+		<!-- Responsive grid layout - always 3 cards on desktop -->
+		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+			{#each discovery.items as item (item.id)}
+				<DiscoveryCard {item} />
+			{/each}
 		</div>
 	{/if}
 

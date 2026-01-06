@@ -9,7 +9,7 @@ import { browser } from '$app/environment';
 
 const STORAGE_KEY = 'sveltereader-mode';
 
-export type AppMode = 'reader' | 'webscrape' | 'synthesize';
+export type AppMode = 'reader' | 'deepresearch' | 'synthesize';
 
 export interface ModeInfo {
 	id: AppMode;
@@ -28,16 +28,16 @@ export const MODES: ModeInfo[] = [
 		route: '/reader'
 	},
 	{
-		id: 'webscrape',
-		name: 'Web Scrape',
-		description: 'Search and synthesize from the web',
-		icon: 'Globe',
-		route: '/webscrape'
+		id: 'deepresearch',
+		name: 'Deep Research',
+		description: 'AI-powered deep research with parallel agents',
+		icon: 'Search',
+		route: '/deepresearch'
 	},
 	{
 		id: 'synthesize',
 		name: 'Synthesize',
-		description: 'Deep research and knowledge synthesis',
+		description: 'Knowledge synthesis and document creation',
 		icon: 'FlaskConical',
 		route: '/synthesize'
 	}
@@ -48,7 +48,12 @@ function loadMode(): AppMode {
 	
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
-		if (stored && (stored === 'reader' || stored === 'webscrape' || stored === 'synthesize')) {
+		// Handle migration from old 'webscrape' mode
+		if (stored === 'webscrape') {
+			saveMode('deepresearch');
+			return 'deepresearch';
+		}
+		if (stored && (stored === 'reader' || stored === 'deepresearch' || stored === 'synthesize')) {
 			return stored as AppMode;
 		}
 	} catch (e) {
@@ -89,4 +94,3 @@ function createModeStore() {
 }
 
 export const modeStore = createModeStore();
-

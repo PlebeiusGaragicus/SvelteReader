@@ -54,6 +54,7 @@
 		"epubjs": "^0.3.93",
 		"idb": "^8.0.3",
 		"mode-watcher": "^1.1.0",
+		"pdfjs-dist": "^5.4.530",
 		"svelte-sonner": "^1.0.7",
 		"tailwind-merge": "^3.4.0",
 		"tailwind-variants": "^3.2.2",

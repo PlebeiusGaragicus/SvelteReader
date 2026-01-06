@@ -9,6 +9,8 @@
  * - Graph interrupts before tool execution
  * - Client executes tools locally (EPUB access, vector search)
  * - Client resumes graph with tool results
+ * 
+ * Supports both the reader_assistant and deepresearch agents.
  */
 
 import { Client } from '@langchain/langgraph-sdk';
@@ -43,6 +45,19 @@ export interface ToolResult {
 	error?: string;
 }
 
+// Research-specific state from deep research agent
+export interface ResearchState {
+	research_phase?: 'clarifying' | 'planning' | 'researching' | 'synthesizing' | 'complete';
+	research_brief?: string;
+	research_iterations?: number;
+	todos?: Array<{
+		id?: string;
+		content: string;
+		status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+	}>;
+	final_report?: string;
+}
+
 export interface StreamCallbacks {
 	onToken?: (token: string) => void;
 	onMessage?: (message: Message) => void;
@@ -52,10 +67,15 @@ export interface StreamCallbacks {
 	onError?: (error: Error) => void;
 	onThreadId?: (threadId: string) => void;
 	onRefund?: () => void;
-	// New callbacks for tool handling
+	// Tool handling callbacks
 	onToolCall?: (toolCalls: ToolCall[]) => void;
 	onToolExecuting?: (toolCalls: ToolCall[]) => void;
 	onToolComplete?: (results: ToolResult[]) => void;
+	// Research-specific callbacks (for deepresearch agent)
+	onResearchState?: (state: ResearchState) => void;
+	onResearchPhase?: (phase: ResearchState['research_phase']) => void;
+	onResearchBrief?: (brief: string) => void;
+	onTodosUpdate?: (todos: ResearchState['todos']) => void;
 }
 
 export interface SubmitOptions {
@@ -235,12 +255,41 @@ export async function submitMessage(
 					const data = event.data as { 
 						messages?: Message[]; 
 						refund?: boolean;
+						// Research-specific fields
+						research_phase?: ResearchState['research_phase'];
+						research_brief?: string;
+						research_iterations?: number;
+						todos?: ResearchState['todos'];
+						final_report?: string;
 					};
 					
 					// Check for refund flag from agent
 					if (data.refund === true) {
 						console.log('[LangGraph] Agent signaled refund needed');
 						shouldRefund = true;
+					}
+					
+					// Extract and broadcast research state for deepresearch agent
+					if (data.research_phase) {
+						callbacks.onResearchPhase?.(data.research_phase);
+					}
+					if (data.research_brief) {
+						callbacks.onResearchBrief?.(data.research_brief);
+					}
+					if (data.todos) {
+						callbacks.onTodosUpdate?.(data.todos);
+					}
+					
+					// Broadcast full research state
+					const researchState: ResearchState = {};
+					if (data.research_phase) researchState.research_phase = data.research_phase;
+					if (data.research_brief) researchState.research_brief = data.research_brief;
+					if (data.research_iterations !== undefined) researchState.research_iterations = data.research_iterations;
+					if (data.todos) researchState.todos = data.todos;
+					if (data.final_report) researchState.final_report = data.final_report;
+					
+					if (Object.keys(researchState).length > 0) {
+						callbacks.onResearchState?.(researchState);
 					}
 					
 					if (data.messages) {
