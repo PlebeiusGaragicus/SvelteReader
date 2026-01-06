@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Globe, User, LogIn, Search, Sparkles, Zap, ArrowLeft, Bot, Loader2, Brain, Settings } from '@lucide/svelte';
 	import { cyphertap } from 'cyphertap';
@@ -112,13 +112,39 @@
 	
 	// Derived: awaiting clarification from agent
 	const awaitingClarification = $derived(clarificationInterrupt !== null);
+	
+	// Derived: detect when clarification JSON is streaming (incomplete JSON in stream)
+	const isStreamingClarificationJson = $derived.by(() => {
+		if (!isStreaming || !streamingContent) return false;
+		const trimmed = streamingContent.trim();
+		if (!trimmed.startsWith('{')) return false;
+		
+		// Check for clarification patterns
+		const hasClarificationPatterns = 
+			trimmed.includes('"need_clarification"') || 
+			trimmed.includes('"question"') ||
+			trimmed.includes('"verification"') ||
+			trimmed.includes('"clarification_needed"');
+		
+		if (!hasClarificationPatterns) return false;
+		
+		// If we can't parse it, it's still streaming
+		try {
+			JSON.parse(trimmed);
+			return false;
+		} catch {
+			return true;
+		}
+	});
 
 	// =============================================================================
 	// PROCESSED MESSAGES - Convert LangGraph messages to display format
 	// =============================================================================
 
 	const processedMessages = $derived.by((): ProcessedMessage[] => {
-		const messageMap = new Map<string, { message: LangGraphMessage; toolCalls: ToolCallWithStatus[] }>();
+		const messageMap = new Map<string, { message: LangGraphMessage; toolCalls: ToolCallWithStatus[]; order: number }>();
+		// Track content hashes to deduplicate messages with same content
+		const seenContentHashes = new Set<string>();
 		
 		langGraphMessages.forEach((message, index) => {
 			if (message.type === 'ai') {
@@ -140,15 +166,32 @@
 				const hasContent = messageContent && messageContent.trim() !== '';
 				const hasToolCalls = toolCallsWithStatus.length > 0;
 				
-				if (hasContent || hasToolCalls) {
-					const stableId = message.id || `ai-${index}`;
-					messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus });
+				// Skip messages with no displayable content
+				if (!hasContent && !hasToolCalls) {
+					return;
 				}
+				
+				// Create content hash for deduplication
+				const contentHash = hasContent ? messageContent.slice(0, 100) : '';
+				
+				// Skip if we've already seen this exact content (deduplication)
+				if (hasContent && seenContentHashes.has(contentHash)) {
+					return;
+				}
+				
+				if (hasContent) {
+					seenContentHashes.add(contentHash);
+				}
+				
+				// Use stable ID - prefer message.id, fall back to index-based
+				const stableId = message.id || `ai-${index}`;
+				messageMap.set(stableId, { message, toolCalls: toolCallsWithStatus, order: index });
 				
 			} else if (message.type === 'tool') {
 				const toolCallId = message.tool_call_id;
 				if (!toolCallId) return;
 				
+				// Find the AI message that made this tool call and update its status
 				for (const [, data] of messageMap.entries()) {
 					const toolCallIndex = data.toolCalls.findIndex(tc => tc.id === toolCallId);
 					if (toolCallIndex !== -1) {
@@ -163,34 +206,49 @@
 				
 			} else if (message.type === 'human') {
 				const stableId = message.id || `human-${index}`;
-				messageMap.set(stableId, { message, toolCalls: [] });
+				const content = extractStringContent(message);
+				
+				// Skip empty human messages
+				if (!content.trim()) return;
+				
+				// Deduplicate human messages too
+				const contentHash = content.slice(0, 100);
+				if (seenContentHashes.has(contentHash)) {
+					return;
+				}
+				seenContentHashes.add(contentHash);
+				
+				messageMap.set(stableId, { message, toolCalls: [], order: index });
 			}
 		});
 		
-		return Array.from(messageMap.entries()).map(([id, data]): ProcessedMessage => {
-			const content = extractStringContent(data.message);
-			
-			let sources: SearchSource[] = [];
-			if (data.message.type === 'ai' && content) {
-				const sourcesMatch = content.match(/\*\*Sources:\*\*[\s\S]*$/);
-				if (sourcesMatch) {
-					const urlMatches = [...sourcesMatch[0].matchAll(/(\d+)\.\s*\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)];
-					sources = urlMatches.map((match) => ({
-						index: parseInt(match[1]),
-						title: match[2],
-						url: match[3],
-					}));
+		// Sort by original order and convert to ProcessedMessage array
+		return Array.from(messageMap.entries())
+			.sort(([, a], [, b]) => a.order - b.order)
+			.map(([id, data]): ProcessedMessage => {
+				const content = extractStringContent(data.message);
+				
+				let sources: SearchSource[] = [];
+				if (data.message.type === 'ai' && content) {
+					const sourcesMatch = content.match(/\*\*Sources:\*\*[\s\S]*$/);
+					if (sourcesMatch) {
+						const urlMatches = [...sourcesMatch[0].matchAll(/(\d+)\.\s*\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g)];
+						sources = urlMatches.map((match) => ({
+							index: parseInt(match[1]),
+							title: match[2],
+							url: match[3],
+						}));
+					}
 				}
-			}
-			
-			return {
-				id,
-				role: data.message.type === 'human' ? 'user' : 'assistant',
-				content,
-				toolCalls: data.toolCalls.length > 0 ? data.toolCalls : undefined,
-				sources: sources.length > 0 ? sources : undefined,
-			};
-		});
+				
+				return {
+					id,
+					role: data.message.type === 'human' ? 'user' : 'assistant',
+					content,
+					toolCalls: data.toolCalls.length > 0 ? data.toolCalls : undefined,
+					sources: sources.length > 0 ? sources : undefined,
+				};
+			});
 	});
 
 	const hasChat = $derived(processedMessages.length > 0 || isStreaming);
@@ -199,14 +257,35 @@
 	const showDiscoveryFeed = $derived(!hasStartedSearch && processedMessages.length === 0 && !isStreaming);
 
 	const showStreamingBubble = $derived.by(() => {
-		if (!isStreaming || !streamingContent) return false;
+		// Don't show if not streaming or no content yet
+		if (!isStreaming || !streamingContent || !streamingContent.trim()) return false;
 		
+		// Parse the streaming content to get clean text (in case it's clarification JSON)
+		const cleanStreamingContent = parseClarificationContent(streamingContent);
+		if (!cleanStreamingContent.trim()) return false;
+		
+		// Find the last human message index
 		const lastHumanIdx = processedMessages.findLastIndex(m => m.role === 'user');
+		
+		// Find the last AI message after the last human message
 		const lastAiAfterHuman = processedMessages.findLast((m, i) => m.role === 'assistant' && i > lastHumanIdx);
 		
 		if (lastAiAfterHuman && lastAiAfterHuman.content) {
-			if (lastAiAfterHuman.content.length > 0 && streamingContent.startsWith(lastAiAfterHuman.content.slice(0, 20))) {
-				return false;
+			// If the synced message content is similar to streaming content, hide the streaming bubble
+			// This prevents duplicate display when onMessagesSync has caught up
+			const syncedContent = lastAiAfterHuman.content.trim();
+			const streamingClean = cleanStreamingContent.trim();
+			
+			// Check if contents are substantially the same (either one starts with the other)
+			if (syncedContent.length > 0) {
+				const shortSynced = syncedContent.slice(0, 50);
+				const shortStreaming = streamingClean.slice(0, 50);
+				
+				if (shortSynced === shortStreaming || 
+					streamingClean.startsWith(shortSynced) || 
+					syncedContent.startsWith(shortStreaming)) {
+					return false;
+				}
 			}
 		}
 		
@@ -227,19 +306,58 @@
 	// HELPERS
 	// =============================================================================
 
-	function extractStringContent(message: LangGraphMessage): string {
-		if (typeof message.content === 'string') {
-			return message.content;
+	/**
+	 * Parse clarification JSON content and extract clean text.
+	 * The agent sometimes returns JSON with fields like need_clarification, question, verification.
+	 * We want to display only the clean verification/response text, not the raw JSON.
+	 */
+	function parseClarificationContent(content: string): string {
+		// Quick check - if it doesn't look like JSON, return as-is
+		const trimmed = content.trim();
+		if (!trimmed.startsWith('{')) {
+			return content;
 		}
-		if (Array.isArray(message.content)) {
-			return message.content
+		
+		// Check for clarification JSON patterns
+		if (trimmed.includes('"need_clarification"') || 
+			trimmed.includes('"verification"') ||
+			trimmed.includes('"clarification_needed"')) {
+			try {
+				const parsed = JSON.parse(trimmed);
+				// Extract the clean text from known fields
+				if (parsed.verification && typeof parsed.verification === 'string') {
+					return parsed.verification;
+				}
+				if (parsed.response && typeof parsed.response === 'string') {
+					return parsed.response;
+				}
+				// If it's just metadata with no content, return empty
+				if (parsed.need_clarification === false && !parsed.verification && !parsed.response) {
+					return '';
+				}
+			} catch {
+				// Not valid JSON, return as-is
+			}
+		}
+		return content;
+	}
+
+	function extractStringContent(message: LangGraphMessage): string {
+		let rawContent = '';
+		
+		if (typeof message.content === 'string') {
+			rawContent = message.content;
+		} else if (Array.isArray(message.content)) {
+			rawContent = message.content
 				.filter((c): c is { type: 'text'; text: string } => 
 					typeof c === 'object' && c !== null && 'type' in c && c.type === 'text'
 				)
 				.map(c => c.text)
 				.join('\n');
 		}
-		return '';
+		
+		// Parse clarification JSON to extract clean text
+		return parseClarificationContent(rawContent);
 	}
 
 	// =============================================================================
@@ -295,16 +413,27 @@
 		});
 	});
 
+	// Save thread to history when messages change (but not during loading/streaming)
+	// Use untrack for the save call to prevent infinite effect loops
 	$effect(() => {
-		if (threadId && langGraphMessages.length > 0 && !isStreaming && !isLoadingThread) {
-			deepResearchHistoryStore.saveThread(
-				threadId,
-				langGraphMessages,
-				currentSources,
-				suggestions,
-				researchBrief,
-				currentPhase === 'complete' ? 'complete' : undefined
-			);
+		// Track these values to trigger the effect
+		const id = threadId;
+		const messages = langGraphMessages;
+		const streaming = isStreaming;
+		const loading = isLoadingThread;
+		
+		if (id && messages.length > 0 && !streaming && !loading) {
+			// Use untrack to prevent the save from triggering this effect again
+			untrack(() => {
+				deepResearchHistoryStore.saveThread(
+					id,
+					messages,
+					currentSources,
+					suggestions,
+					researchBrief,
+					currentPhase === 'complete' ? 'complete' : undefined
+				);
+			});
 		}
 	});
 
@@ -453,22 +582,31 @@
 					onThreadId: (id) => {
 						threadId = id;
 					},
-					onClarificationInterrupt: (interrupt, interruptId) => {
-						console.log('[DeepResearch] Clarification interrupt received:', interrupt.question);
-						clarificationInterrupt = interrupt;
-						clarificationInterruptId = interruptId;
-						currentPhase = 'clarifying';
-						isStreaming = false;
-					},
-					onComplete: (messages) => {
-						langGraphMessages = [...messages];
-						currentPhase = 'complete';
-						activeResearchTopics = [];
-					},
-					onError: (err) => {
-						error = err.message;
-						toast.error('Research failed', { description: err.message });
-					},
+				onClarificationInterrupt: (interrupt, interruptId) => {
+					console.log('[DeepResearch] Clarification interrupt received:', interrupt.question);
+					clarificationInterrupt = interrupt;
+					clarificationInterruptId = interruptId;
+					currentPhase = 'clarifying';
+					isStreaming = false;
+					streamingContent = '';
+				},
+				onComplete: (messages) => {
+					console.log('[DeepResearch] Research complete with', messages.length, 'messages');
+					langGraphMessages = [...messages];
+					currentPhase = 'complete';
+					activeResearchTopics = [];
+					// Explicitly reset streaming state to prevent UI freeze
+					isStreaming = false;
+					streamingContent = '';
+				},
+				onError: (err) => {
+					console.error('[DeepResearch] Stream error:', err);
+					error = err.message;
+					toast.error('Research failed', { description: err.message });
+					// Reset streaming state on error
+					isStreaming = false;
+					streamingContent = '';
+				},
 				}
 			);
 			
@@ -549,21 +687,30 @@
 					onTodosSync: (todoList) => {
 						todos = todoList;
 					},
-					onClarificationInterrupt: (interrupt, newInterruptId) => {
-						// Another clarification needed
-						clarificationInterrupt = interrupt;
-						clarificationInterruptId = newInterruptId;
-						currentPhase = 'clarifying';
-						isStreaming = false;
-					},
-					onComplete: (messages) => {
-						langGraphMessages = [...messages];
-						currentPhase = 'complete';
-					},
-					onError: (err) => {
-						error = err.message;
-						toast.error('Failed to continue research', { description: err.message });
-					},
+				onClarificationInterrupt: (interrupt, newInterruptId) => {
+					// Another clarification needed
+					clarificationInterrupt = interrupt;
+					clarificationInterruptId = newInterruptId;
+					currentPhase = 'clarifying';
+					isStreaming = false;
+					streamingContent = '';
+				},
+				onComplete: (messages) => {
+					console.log('[DeepResearch] Resume complete with', messages.length, 'messages');
+					langGraphMessages = [...messages];
+					currentPhase = 'complete';
+					// Explicitly reset streaming state to prevent UI freeze
+					isStreaming = false;
+					streamingContent = '';
+				},
+				onError: (err) => {
+					console.error('[DeepResearch] Resume error:', err);
+					error = err.message;
+					toast.error('Failed to continue research', { description: err.message });
+					// Reset streaming state on error
+					isStreaming = false;
+					streamingContent = '';
+				},
 				}
 			);
 		} catch (e) {
@@ -596,21 +743,40 @@
 	}
 
 	function loadThread(id: string) {
-		const thread = deepResearchHistoryStore.getThread(id);
-		if (thread) {
-			isLoadingThread = true;
-			threadId = id;
-			langGraphMessages = structuredClone(thread.messages);
-			suggestions = thread.suggestions ? [...thread.suggestions] : [];
-			researchBrief = thread.researchBrief || '';
-			currentPhase = thread.researchPhase || 'idle';
-			error = null;
-			streamingContent = '';
-			loadingSuggestions = false;
-			setTimeout(() => {
-				isLoadingThread = false;
-			}, 0);
+		// Guard: don't reload the same thread or while already loading
+		if (id === threadId || isLoadingThread) {
+			return;
 		}
+		
+		const thread = deepResearchHistoryStore.getThread(id);
+		if (!thread) {
+			console.warn('[DeepResearch] Thread not found:', id);
+			return;
+		}
+		
+		isLoadingThread = true;
+		
+		// Reset streaming state
+		isStreaming = false;
+		streamingContent = '';
+		error = null;
+		loadingSuggestions = false;
+		clarificationInterrupt = null;
+		clarificationInterruptId = null;
+		
+		// Load thread data from local storage
+		threadId = id;
+		// Use JSON parse/stringify instead of structuredClone to avoid DataCloneError
+		langGraphMessages = JSON.parse(JSON.stringify(thread.messages));
+		suggestions = thread.suggestions ? [...thread.suggestions] : [];
+		researchBrief = thread.researchBrief || '';
+		currentPhase = thread.researchPhase || 'idle';
+		
+		// If thread has messages, user has started search
+		hasStartedSearch = langGraphMessages.length > 0;
+		
+		// Mark loading complete synchronously - don't use setTimeout which can cause loops
+		isLoadingThread = false;
 	}
 
 	function handleSuggestionClick(suggestion: string) {
@@ -789,6 +955,18 @@
 							onSubmit={handleClarificationResponse}
 							isSubmitting={isSubmittingClarification}
 						/>
+					{:else if isStreamingClarificationJson}
+						<!-- Agent is preparing a clarification question -->
+						<div class="w-full max-w-2xl mx-auto">
+							<div class="flex items-center gap-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/5 px-5 py-4">
+								<div class="flex-shrink-0">
+									<div class="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center">
+										<Loader2 class="w-4 h-4 text-cyan-400 animate-spin" />
+									</div>
+								</div>
+								<p class="text-sm text-cyan-300">Preparing a question for you...</p>
+							</div>
+						</div>
 					{:else}
 						<!-- Normal input for follow-up questions -->
 						<ResearchInputBar 

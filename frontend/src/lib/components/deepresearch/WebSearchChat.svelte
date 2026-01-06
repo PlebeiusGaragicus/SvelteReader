@@ -58,6 +58,69 @@
 			default: return 'Thinking...';
 		}
 	}
+	
+	/**
+	 * Check if content looks like incomplete clarification JSON that's still streaming.
+	 * We want to hide the streaming bubble when the agent is still outputting JSON.
+	 */
+	function isIncompleteClarificationJson(content: string): boolean {
+		const trimmed = content.trim();
+		if (!trimmed.startsWith('{')) return false;
+		
+		// Check if it contains clarification-related patterns
+		const hasClarificationPatterns = 
+			trimmed.includes('"need_clarification"') || 
+			trimmed.includes('"question"') ||
+			trimmed.includes('"verification"') ||
+			trimmed.includes('"clarification_needed"');
+		
+		if (!hasClarificationPatterns) return false;
+		
+		// Try to parse - if it fails, it's incomplete
+		try {
+			JSON.parse(trimmed);
+			return false; // Successfully parsed, not incomplete
+		} catch {
+			return true; // Failed to parse, still streaming JSON
+		}
+	}
+	
+	/**
+	 * Parse clarification JSON content and extract clean text.
+	 * The agent sometimes returns JSON with fields like need_clarification, question, verification.
+	 */
+	function parseClarificationContent(content: string): string {
+		const trimmed = content.trim();
+		if (!trimmed.startsWith('{')) return content;
+		
+		if (trimmed.includes('"need_clarification"') || 
+			trimmed.includes('"verification"') ||
+			trimmed.includes('"clarification_needed"')) {
+			try {
+				const parsed = JSON.parse(trimmed);
+				if (parsed.verification && typeof parsed.verification === 'string') {
+					return parsed.verification;
+				}
+				if (parsed.response && typeof parsed.response === 'string') {
+					return parsed.response;
+				}
+				if (parsed.need_clarification === false && !parsed.verification && !parsed.response) {
+					return '';
+				}
+			} catch { /* not valid JSON, return as-is */ }
+		}
+		return content;
+	}
+	
+	// Check if streaming content is incomplete clarification JSON - if so, hide it
+	const isStreamingJson = $derived(streamingContent ? isIncompleteClarificationJson(streamingContent) : false);
+	
+	// Parse streaming content for display (only if it's not incomplete JSON)
+	const cleanStreamingContent = $derived.by(() => {
+		if (!streamingContent) return '';
+		if (isStreamingJson) return ''; // Hide incomplete JSON
+		return parseClarificationContent(streamingContent);
+	});
 </script>
 
 <div class="flex flex-col gap-6">
@@ -133,7 +196,7 @@
 	{/each}
 
 	<!-- Streaming Response -->
-	{#if isLoading && streamingContent}
+	{#if isLoading && cleanStreamingContent}
 		<div class="flex gap-3">
 			<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600">
 				<Bot class="h-4 w-4 text-white" />
@@ -141,7 +204,7 @@
 			<div class="flex-1 min-w-0">
 				<div class="rounded-2xl rounded-tl-md bg-muted px-4 py-3">
 					<div class="prose prose-sm max-w-none dark:prose-invert">
-						<MarkdownRenderer content={streamingContent} />
+						<MarkdownRenderer content={cleanStreamingContent} />
 					</div>
 				</div>
 			</div>
