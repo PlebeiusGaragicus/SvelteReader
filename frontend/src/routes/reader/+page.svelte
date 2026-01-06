@@ -263,18 +263,12 @@
 				</p>
 			</div>
 		</div>
-	{:else if books.items.length === 0 && otherBooks.length === 0}
+	{:else if spectateStore.isSpectating && books.items.length === 0}
+		<!-- Spectating user with no books -->
 		<div class="flex flex-col items-center justify-center py-20 text-center">
-			{#if spectateStore.isSpectating}
-				<Binoculars class="mb-4 h-20 w-20 text-blue-400" />
-				<h2 class="mb-2 text-2xl font-semibold">No books found</h2>
-				<p class="mb-6 text-muted-foreground">This user hasn't published any books yet</p>
-			{:else}
-				<BookOpen class="mb-4 h-20 w-20 text-muted-foreground" />
-				<h2 class="mb-2 text-2xl font-semibold">No books yet</h2>
-				<p class="mb-6 text-muted-foreground">Import your first EPUB or drag and drop a file</p>
-				<ImportButton bind:this={importButtonRef} />
-			{/if}
+			<Binoculars class="mb-4 h-20 w-20 text-blue-400" />
+			<h2 class="mb-2 text-2xl font-semibold">No books found</h2>
+			<p class="mb-6 text-muted-foreground">This user hasn't published any books yet</p>
 		</div>
 	{:else}
 		{#if spectateStore.isSpectating && spectateStore.target}

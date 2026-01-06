@@ -13,6 +13,35 @@ import { browser } from '$app/environment';
 
 export type FileType = 'pdf' | 'image' | 'text';
 
+/**
+ * OCR Version - A single OCR extraction result with full metadata
+ * for transparency and deterministic regeneration
+ */
+export interface OcrVersion {
+	id: string;                              // Unique ID for this OCR version
+	
+	// Generation metadata for transparency and reproducibility
+	model: string;                           // e.g., "gpt-4o", "claude-sonnet-4", "tesseract"
+	provider?: string;                       // e.g., "openai", "anthropic", "local"
+	modelVersion?: string;                   // Specific model version if known
+	generatedAt: number;                     // Unix timestamp (ms)
+	seed?: number;                           // For deterministic regeneration
+	temperature?: number;                    // Model temperature setting
+	maxTokens?: number;                      // Token limit used
+	systemPrompt?: string;                   // The prompt used for OCR (if applicable)
+	additionalSettings?: Record<string, unknown>; // Other model-specific settings
+	
+	// Content - array of strings, one per page (or single item for images)
+	pages: string[];                         // OCR'd content per page (markdown/text)
+	
+	// Optional quality/confidence metrics
+	confidence?: number;                     // Overall confidence 0-1
+	pageConfidences?: number[];              // Per-page confidence scores
+	
+	// Human-readable label for distinguishing versions
+	label?: string;                          // e.g., "High accuracy", "Fast mode"
+}
+
 export interface UserFile {
 	id: string;
 	npub: string;                  // Owner's npub for scoping
@@ -20,7 +49,7 @@ export interface UserFile {
 	type: FileType;
 	mimeType: string;
 	size: number;                  // File size in bytes
-	content: ArrayBuffer;          // Raw file content
+	content: ArrayBuffer | Uint8Array;  // Raw file content (stored as Uint8Array in IndexedDB)
 	textContent?: string;          // Extracted text for RAG (PDFs, text files)
 	textPreview?: string;          // First ~200 characters of text for preview
 	thumbnail?: string;            // Base64 data URL for preview (images, PDF first page)
@@ -28,6 +57,7 @@ export interface UserFile {
 	sourceUrl?: string;            // URL where the file was obtained
 	tags?: string[];               // User-defined tags
 	isPublic?: boolean;            // Whether to sync to Nostr (false = local only)
+	ocrVersions?: OcrVersion[];    // OCR'd content versions (for PDFs and images)
 	createdAt: number;
 	updatedAt: number;
 }
@@ -53,21 +83,50 @@ function getDB(): Promise<IDBDatabase> {
 	
 	if (!dbPromise) {
 		dbPromise = new Promise((resolve, reject) => {
-			const request = indexedDB.open(DB_NAME, DB_VERSION);
-			
-			request.onerror = () => reject(request.error);
-			request.onsuccess = () => resolve(request.result);
-			
-			request.onupgradeneeded = (event) => {
-				const db = (event.target as IDBOpenDBRequest).result;
+			try {
+				const request = indexedDB.open(DB_NAME, DB_VERSION);
 				
-				if (!db.objectStoreNames.contains(STORE_NAME)) {
-					const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-					store.createIndex('npub', 'npub', { unique: false });
-					store.createIndex('type', 'type', { unique: false });
-					store.createIndex('createdAt', 'createdAt', { unique: false });
-				}
-			};
+				request.onerror = () => {
+					console.error('[UserFiles] Failed to open IndexedDB:', request.error);
+					dbPromise = null; // Reset so we can retry
+					reject(request.error);
+				};
+				
+				request.onsuccess = () => {
+					const db = request.result;
+					
+					// Handle database close events (e.g., browser closing the connection)
+					db.onclose = () => {
+						console.warn('[UserFiles] IndexedDB connection closed unexpectedly');
+						dbPromise = null; // Reset so we reconnect on next operation
+					};
+					
+					db.onerror = (event) => {
+						console.error('[UserFiles] IndexedDB error:', event);
+					};
+					
+					resolve(db);
+				};
+				
+				request.onupgradeneeded = (event) => {
+					const db = (event.target as IDBOpenDBRequest).result;
+					
+					if (!db.objectStoreNames.contains(STORE_NAME)) {
+						const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+						store.createIndex('npub', 'npub', { unique: false });
+						store.createIndex('type', 'type', { unique: false });
+						store.createIndex('createdAt', 'createdAt', { unique: false });
+					}
+				};
+				
+				request.onblocked = () => {
+					console.warn('[UserFiles] IndexedDB upgrade blocked - close other tabs');
+				};
+			} catch (e) {
+				console.error('[UserFiles] Error opening IndexedDB:', e);
+				dbPromise = null;
+				reject(e);
+			}
 		});
 	}
 	
@@ -76,13 +135,111 @@ function getDB(): Promise<IDBDatabase> {
 
 async function saveFile(file: UserFile): Promise<void> {
 	const db = await getDB();
+	
+	// Check if connection is still valid
+	if (!db.objectStoreNames.contains(STORE_NAME)) {
+		// Database connection is stale, reset and retry
+		dbPromise = null;
+		const freshDb = await getDB();
+		return saveFileToDb(freshDb, file);
+	}
+	
+	return saveFileToDb(db, file);
+}
+
+function saveFileToDb(db: IDBDatabase, file: UserFile): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const tx = db.transaction(STORE_NAME, 'readwrite');
-		const store = tx.objectStore(STORE_NAME);
-		const request = store.put(file);
-		
-		request.onerror = () => reject(request.error);
-		request.onsuccess = () => resolve();
+		try {
+			// Validate file data before storing
+			if (!file.id || !file.npub || !file.name) {
+				reject(new Error('Invalid file data: missing required fields'));
+				return;
+			}
+			
+			// Ensure content is valid (ArrayBuffer or Uint8Array, not detached)
+			const isArrayBuffer = file.content instanceof ArrayBuffer;
+			const isUint8Array = file.content instanceof Uint8Array;
+			const byteLength = isArrayBuffer 
+				? (file.content as ArrayBuffer).byteLength 
+				: isUint8Array 
+					? (file.content as Uint8Array).length 
+					: 0;
+			
+			if ((!isArrayBuffer && !isUint8Array) || byteLength === 0) {
+				console.error('[UserFiles] Invalid content buffer:', {
+					isArrayBuffer,
+					isUint8Array,
+					byteLength
+				});
+				reject(new Error('Invalid file content: buffer is empty or invalid'));
+				return;
+			}
+			
+			// Create a plain object copy to avoid any proxy/reactive issues
+			// Only include defined values to avoid serialization issues
+			// Convert to Uint8Array for better IndexedDB compatibility
+			const contentAsUint8 = file.content instanceof Uint8Array 
+				? file.content 
+				: new Uint8Array(file.content);
+			
+			const plainFile: Record<string, unknown> = {
+				id: file.id,
+				npub: file.npub,
+				name: file.name,
+				type: file.type,
+				mimeType: file.mimeType,
+				size: file.size,
+				content: contentAsUint8,
+				createdAt: file.createdAt,
+				updatedAt: file.updatedAt,
+			};
+			
+			console.log('[UserFiles] Prepared plainFile for save, content bytes:', contentAsUint8.length);
+			
+			// Add optional fields only if they have values
+			if (file.textContent !== undefined) plainFile.textContent = file.textContent;
+			if (file.textPreview !== undefined) plainFile.textPreview = file.textPreview;
+			if (file.thumbnail !== undefined) plainFile.thumbnail = file.thumbnail;
+			if (file.description !== undefined) plainFile.description = file.description;
+			if (file.sourceUrl !== undefined) plainFile.sourceUrl = file.sourceUrl;
+			if (file.tags && file.tags.length > 0) plainFile.tags = [...file.tags];
+			if (file.isPublic !== undefined) plainFile.isPublic = file.isPublic;
+			if (file.ocrVersions && file.ocrVersions.length > 0) {
+				plainFile.ocrVersions = JSON.parse(JSON.stringify(file.ocrVersions));
+			}
+			
+			const tx = db.transaction(STORE_NAME, 'readwrite');
+			const store = tx.objectStore(STORE_NAME);
+			
+			let request: IDBRequest;
+			try {
+				request = store.put(plainFile);
+			} catch (putError) {
+				console.error('[UserFiles] Error during put operation:', putError);
+				reject(putError);
+				return;
+			}
+			
+			request.onerror = () => {
+				console.error('[UserFiles] IndexedDB request error:', request.error);
+				reject(request.error);
+			};
+			request.onsuccess = () => {
+				resolve();
+			};
+			
+			tx.onerror = () => {
+				console.error('[UserFiles] IndexedDB transaction error:', tx.error);
+				reject(tx.error);
+			};
+			tx.onabort = () => {
+				console.error('[UserFiles] IndexedDB transaction aborted:', tx.error);
+				reject(tx.error || new Error('Transaction aborted'));
+			};
+		} catch (e) {
+			console.error('[UserFiles] Error creating transaction:', e);
+			reject(e);
+		}
 	});
 }
 
@@ -245,40 +402,55 @@ function getFileTypeFromMime(mimeType: string): FileType {
 
 async function createThumbnail(file: File, type: FileType, arrayBuffer?: ArrayBuffer): Promise<string | undefined> {
 	if (type === 'image') {
-		return new Promise((resolve) => {
-			const reader = new FileReader();
-			reader.onload = (e) => {
-				const img = new Image();
-				img.onload = () => {
-					const canvas = document.createElement('canvas');
-					const maxSize = 200;
-					let width = img.width;
-					let height = img.height;
-					
-					if (width > height) {
-						if (width > maxSize) {
-							height = (height * maxSize) / width;
-							width = maxSize;
-						}
-					} else {
-						if (height > maxSize) {
-							width = (width * maxSize) / height;
-							height = maxSize;
-						}
+		try {
+			return await new Promise((resolve) => {
+				const reader = new FileReader();
+				reader.onload = (e) => {
+					try {
+						const img = new Image();
+						img.onload = () => {
+							try {
+								const canvas = document.createElement('canvas');
+								const maxSize = 200;
+								let width = img.width;
+								let height = img.height;
+								
+								if (width > height) {
+									if (width > maxSize) {
+										height = (height * maxSize) / width;
+										width = maxSize;
+									}
+								} else {
+									if (height > maxSize) {
+										width = (width * maxSize) / height;
+										height = maxSize;
+									}
+								}
+								
+								canvas.width = width;
+								canvas.height = height;
+								const ctx = canvas.getContext('2d');
+								ctx?.drawImage(img, 0, 0, width, height);
+								resolve(canvas.toDataURL('image/jpeg', 0.7));
+							} catch (e) {
+								console.warn('[UserFiles] Error creating thumbnail canvas:', e);
+								resolve(undefined);
+							}
+						};
+						img.onerror = () => resolve(undefined);
+						img.src = e.target?.result as string;
+					} catch (e) {
+						console.warn('[UserFiles] Error loading image for thumbnail:', e);
+						resolve(undefined);
 					}
-					
-					canvas.width = width;
-					canvas.height = height;
-					const ctx = canvas.getContext('2d');
-					ctx?.drawImage(img, 0, 0, width, height);
-					resolve(canvas.toDataURL('image/jpeg', 0.7));
 				};
-				img.onerror = () => resolve(undefined);
-				img.src = e.target?.result as string;
-			};
-			reader.onerror = () => resolve(undefined);
-			reader.readAsDataURL(file);
-		});
+				reader.onerror = () => resolve(undefined);
+				reader.readAsDataURL(file);
+			});
+		} catch (e) {
+			console.warn('[UserFiles] Error in thumbnail generation:', e);
+			return undefined;
+		}
 	}
 	
 	// PDF thumbnail generation using pdfjs-dist
@@ -466,8 +638,11 @@ function createUserFilesStore() {
 		}
 		
 		try {
+			console.log(`[UserFiles] Starting upload for ${file.name}, size: ${file.size}, type: ${file.type}`);
+			
 			// Read file content first
 			const content = await file.arrayBuffer();
+			console.log(`[UserFiles] Read ArrayBuffer, byteLength: ${content.byteLength}`);
 			
 			// Detect file type from content (magic bytes), not just extension/browser MIME
 			const detected = detectFileTypeFromContent(content, file.type, file.name);
@@ -482,8 +657,13 @@ function createUserFilesStore() {
 			
 			console.log(`[UserFiles] Detected type: ${type} (${mimeType}) for ${file.name}`);
 			
+			console.log('[UserFiles] Creating thumbnail...');
 			const thumbnail = await createThumbnail(file, type, content);
+			console.log(`[UserFiles] Thumbnail created: ${thumbnail ? 'yes' : 'no'}`);
+			
+			console.log('[UserFiles] Extracting text content...');
 			const { text: textContent, preview: textPreview } = await extractTextContent(file, type, content);
+			console.log(`[UserFiles] Text extracted: ${textContent ? textContent.length + ' chars' : 'none'}`);
 			
 			const now = Date.now();
 			const userFile: UserFile = {
@@ -501,7 +681,9 @@ function createUserFilesStore() {
 				updatedAt: now,
 			};
 			
+			console.log('[UserFiles] Saving to IndexedDB...');
 			await saveFile(userFile);
+			console.log('[UserFiles] Save successful, updating state...');
 			files = [userFile, ...files];
 			
 			console.log(`[UserFiles] Uploaded: ${file.name} as ${type}`);
@@ -535,7 +717,7 @@ function createUserFilesStore() {
 
 	// Update file metadata
 	// Editable fields that users can modify
-	type EditableFields = 'name' | 'description' | 'sourceUrl' | 'tags' | 'thumbnail' | 'isPublic';
+	type EditableFields = 'name' | 'description' | 'sourceUrl' | 'tags' | 'thumbnail' | 'isPublic' | 'ocrVersions';
 	
 	async function updateFile(id: string, updates: Partial<Pick<UserFile, EditableFields>>): Promise<void> {
 		const file = files.find(f => f.id === id);

@@ -73,6 +73,9 @@
 				toast.error(`Failed to import ${file.name}`, { description: result.error });
 				return null;
 			}
+		} catch (e) {
+			toast.error(`Failed to import ${file.name}`, { description: (e as Error).message });
+			return null;
 		} finally {
 			isUploading = false;
 		}

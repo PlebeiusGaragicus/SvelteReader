@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { X, Upload, Globe, Lock, Loader2, FileText, Image, File, Link, Tag, Plus, Check, Search } from '@lucide/svelte';
-	import { userFilesStore, type UserFile } from '$lib/stores/userFiles.svelte';
+	import { X, Upload, Globe, Lock, Loader2, FileText, Image, File, Link, Tag, Plus, Check, Search, ScanText, Trash2, ChevronDown, ChevronRight, Sparkles, Clock, Bot, Settings2 } from '@lucide/svelte';
+	import { userFilesStore, type UserFile, type OcrVersion } from '$lib/stores/userFiles.svelte';
 	import { Popover } from 'bits-ui';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		file: UserFile | null;
@@ -21,6 +22,12 @@
 	let isPublic = $state(false); // Default to local only
 	let isSaving = $state(false);
 	let error = $state<string | null>(null);
+	
+	// OCR state
+	let ocrVersions = $state<OcrVersion[]>([]);
+	let isGeneratingOcr = $state(false);
+	let expandedOcrVersionId = $state<string | null>(null);
+	let showOcrSection = $state(false);
 	
 	// Cover upload state
 	let coverInputRef = $state<HTMLInputElement | null>(null);
@@ -56,12 +63,76 @@
 			tags = file.tags ? [...file.tags] : [];
 			customThumbnail = null; // Reset custom thumbnail
 			isPublic = file.isPublic ?? false;
+			// Use local variable to avoid reading $state we just wrote (prevents reactive loop)
+			const fileOcrVersions = file.ocrVersions ? [...file.ocrVersions] : [];
+			ocrVersions = fileOcrVersions;
 			error = null;
 			// Reset drag state
 			dragCounter = 0;
 			isDraggingCover = false;
+			// Reset OCR state
+			expandedOcrVersionId = null;
+			// Use local variable to check length, not the $state (avoids effect_update_depth_exceeded)
+			showOcrSection = fileOcrVersions.length > 0;
 		}
 	});
+	
+	// Check if file supports OCR (PDFs and images only)
+	const supportsOcr = $derived(file?.type === 'pdf' || file?.type === 'image');
+	
+	// Generate dummy OCR content
+	async function generateDummyOcr() {
+		if (!file || isGeneratingOcr) return;
+		
+		isGeneratingOcr = true;
+		
+		// Simulate a short delay for realism
+		await new Promise(resolve => setTimeout(resolve, 800));
+		
+		// Determine number of pages (1 for images, estimate for PDFs)
+		const pageCount = file.type === 'pdf' ? 3 : 1; // Dummy: assume 3 pages for PDF
+		
+		const newOcrVersion: OcrVersion = {
+			id: crypto.randomUUID(),
+			model: 'dummy-ocr-v1',
+			provider: 'local',
+			modelVersion: '1.0.0',
+			generatedAt: Date.now(),
+			seed: Math.floor(Math.random() * 100000),
+			temperature: 0.0,
+			maxTokens: 4096,
+			systemPrompt: 'Extract all text from the document, preserving formatting as markdown.',
+			pages: Array.from({ length: pageCount }, (_, i) => 
+				`# Page ${i + 1}\n\nThis is the OCR'd content - this feature is coming soon.\n\n` +
+				`Lorem ipsum dolor sit amet, consectetur adipiscing elit. ` +
+				`Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n\n` +
+				`*Note: Actual OCR extraction will be available in a future update.*`
+			),
+			confidence: 0.95,
+			pageConfidences: Array.from({ length: pageCount }, () => 0.93 + Math.random() * 0.05),
+			label: `OCR ${new Date().toLocaleDateString()}`
+		};
+		
+		ocrVersions = [newOcrVersion, ...ocrVersions];
+		expandedOcrVersionId = newOcrVersion.id;
+		showOcrSection = true;
+		isGeneratingOcr = false;
+		
+		toast.success('OCR generated', { description: 'Dummy OCR content created (feature coming soon)' });
+	}
+	
+	// Delete an OCR version
+	function deleteOcrVersion(versionId: string) {
+		ocrVersions = ocrVersions.filter(v => v.id !== versionId);
+		if (expandedOcrVersionId === versionId) {
+			expandedOcrVersionId = null;
+		}
+	}
+	
+	// Format date for display
+	function formatDate(timestamp: number): string {
+		return new Date(timestamp).toLocaleString();
+	}
 	
 	// Cover image processing
 	async function processCoverImage(imageFile: Blob): Promise<string> {
@@ -265,6 +336,7 @@
 				tags: tags.length > 0 ? tags : undefined,
 				thumbnail: customThumbnail || file.thumbnail, // Use custom if provided
 				isPublic,
+				ocrVersions: ocrVersions.length > 0 ? ocrVersions : undefined,
 			});
 			onClose();
 		} catch (e) {
@@ -503,6 +575,156 @@
 						</Popover.Root>
 					</div>
 				</div>
+
+				<!-- OCR Content Section (for PDFs and images) -->
+				{#if supportsOcr}
+					<div class="space-y-3 pt-2 border-t border-border">
+						<div class="flex items-center justify-between">
+							<button
+								onclick={() => { showOcrSection = !showOcrSection; }}
+								class="flex items-center gap-2 text-sm font-medium"
+							>
+								{#if showOcrSection}
+									<ChevronDown class="h-4 w-4" />
+								{:else}
+									<ChevronRight class="h-4 w-4" />
+								{/if}
+								<ScanText class="h-4 w-4 text-amber-500" />
+								OCR Content
+								{#if ocrVersions.length > 0}
+									<span class="text-xs text-muted-foreground">({ocrVersions.length})</span>
+								{/if}
+							</button>
+							
+							<button
+								onclick={generateDummyOcr}
+								disabled={isGeneratingOcr}
+								class="flex items-center gap-1.5 rounded-md bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 text-xs font-medium text-amber-500 hover:bg-amber-500/20 transition-colors disabled:opacity-50"
+							>
+								{#if isGeneratingOcr}
+									<Loader2 class="h-3.5 w-3.5 animate-spin" />
+									<span>Generating...</span>
+								{:else}
+									<Sparkles class="h-3.5 w-3.5" />
+									<span>Generate OCR</span>
+								{/if}
+							</button>
+						</div>
+						
+						{#if showOcrSection}
+							<div class="space-y-2">
+								{#if ocrVersions.length === 0}
+									<div class="rounded-lg border border-dashed border-border bg-muted/30 p-4 text-center">
+										<ScanText class="h-8 w-8 text-muted-foreground/50 mx-auto mb-2" />
+										<p class="text-xs text-muted-foreground">No OCR content yet</p>
+										<p class="text-xs text-muted-foreground mt-1">
+											Click "Generate OCR" to extract text from this {file?.type === 'pdf' ? 'PDF' : 'image'}
+										</p>
+									</div>
+								{:else}
+									{#each ocrVersions as version (version.id)}
+										{@const isExpanded = expandedOcrVersionId === version.id}
+										<div class="rounded-lg border border-border bg-muted/20 overflow-hidden">
+											<!-- Version header -->
+											<div
+												onclick={() => { expandedOcrVersionId = isExpanded ? null : version.id; }}
+												onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandedOcrVersionId = isExpanded ? null : version.id; } }}
+												role="button"
+												tabindex="0"
+												class="flex items-center gap-3 w-full p-3 text-left hover:bg-muted/40 transition-colors cursor-pointer"
+											>
+												{#if isExpanded}
+													<ChevronDown class="h-4 w-4 text-muted-foreground" />
+												{:else}
+													<ChevronRight class="h-4 w-4 text-muted-foreground" />
+												{/if}
+												
+												<div class="flex-1 min-w-0">
+													<div class="flex items-center gap-2">
+														<span class="text-sm font-medium truncate">
+															{version.label || `Version ${version.id.slice(0, 8)}`}
+														</span>
+														{#if version.confidence}
+															<span class="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-500">
+																{Math.round(version.confidence * 100)}% confidence
+															</span>
+														{/if}
+													</div>
+													<div class="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
+														<span class="flex items-center gap-1">
+															<Bot class="h-3 w-3" />
+															{version.model}
+														</span>
+														<span class="flex items-center gap-1">
+															<Clock class="h-3 w-3" />
+															{formatDate(version.generatedAt)}
+														</span>
+														<span>{version.pages.length} page{version.pages.length !== 1 ? 's' : ''}</span>
+													</div>
+												</div>
+												
+												<button
+													onclick={(e) => { e.stopPropagation(); deleteOcrVersion(version.id); }}
+													class="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+													title="Delete OCR version"
+												>
+													<Trash2 class="h-3.5 w-3.5" />
+												</button>
+											</div>
+											
+											<!-- Expanded content -->
+											{#if isExpanded}
+												<div class="border-t border-border p-3 space-y-3">
+													<!-- Model settings -->
+													<div class="flex flex-wrap gap-2 text-xs">
+														<span class="flex items-center gap-1 px-2 py-1 rounded bg-secondary">
+															<Settings2 class="h-3 w-3" />
+															temp: {version.temperature ?? 'N/A'}
+														</span>
+														{#if version.seed !== undefined}
+															<span class="px-2 py-1 rounded bg-secondary">seed: {version.seed}</span>
+														{/if}
+														{#if version.maxTokens}
+															<span class="px-2 py-1 rounded bg-secondary">max_tokens: {version.maxTokens}</span>
+														{/if}
+														{#if version.provider}
+															<span class="px-2 py-1 rounded bg-secondary">provider: {version.provider}</span>
+														{/if}
+													</div>
+													
+													<!-- Page content preview -->
+													<div class="space-y-2">
+														<p class="text-xs font-medium text-muted-foreground">Content Preview:</p>
+														{#each version.pages.slice(0, 3) as pageContent, pageIndex}
+															<div class="rounded border border-border bg-background p-2">
+																<div class="flex items-center justify-between mb-1">
+																	<span class="text-[10px] font-medium text-muted-foreground">Page {pageIndex + 1}</span>
+																	{#if version.pageConfidences?.[pageIndex]}
+																		<span class="text-[10px] text-muted-foreground">
+																			{Math.round(version.pageConfidences[pageIndex] * 100)}%
+																		</span>
+																	{/if}
+																</div>
+																<p class="text-xs text-foreground/80 whitespace-pre-wrap line-clamp-3 font-mono">
+																	{pageContent.slice(0, 200)}{pageContent.length > 200 ? '...' : ''}
+																</p>
+															</div>
+														{/each}
+														{#if version.pages.length > 3}
+															<p class="text-xs text-muted-foreground text-center">
+																+{version.pages.length - 3} more page{version.pages.length - 3 !== 1 ? 's' : ''}
+															</p>
+														{/if}
+													</div>
+												</div>
+											{/if}
+										</div>
+									{/each}
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/if}
 
 				<!-- Sync Options -->
 				<div class="space-y-2 pt-2">
