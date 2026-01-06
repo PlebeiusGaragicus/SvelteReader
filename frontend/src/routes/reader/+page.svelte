@@ -96,6 +96,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>SvelteReader | Library</title>
+</svelte:head>
+
 <main 
 	class="px-4 py-8 min-h-[calc(100vh-3.5rem)] relative"
 	ondragover={handleDragOver}

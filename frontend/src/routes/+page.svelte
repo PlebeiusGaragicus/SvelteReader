@@ -20,6 +20,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>SvelteReader | Home</title>
+</svelte:head>
+
 <div class="min-h-[calc(100vh-3.5rem)] flex flex-col">
 	<!-- Hero Section -->
 	<div class="flex-1 flex flex-col items-center justify-center px-4 py-16">

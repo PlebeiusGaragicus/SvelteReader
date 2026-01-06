@@ -662,6 +662,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>{book ? `SvelteReader | ${book.title}` : 'SvelteReader | Reader'}</title>
+</svelte:head>
+
 <svelte:window onkeydown={handleKeydown} />
 
 {#if loadError}

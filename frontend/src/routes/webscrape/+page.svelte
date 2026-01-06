@@ -530,6 +530,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>SvelteReader | Web Search</title>
+</svelte:head>
+
 <div class="flex h-[calc(100vh-3.5rem)]">
 	<!-- Sidebar (only for logged in users with history) -->
 	{#if isLoggedIn}
@@ -644,8 +648,8 @@
 		</div>
 	{:else}
 		<!-- Hero section with search -->
-			<div class="flex-1 flex flex-col px-4">
-		<div class="flex flex-col items-center justify-center py-12 lg:py-20">
+			<div class="flex-1 flex flex-col px-4 overflow-y-auto">
+		<div class="flex flex-col items-center justify-center py-12 lg:py-20 flex-shrink-0">
 			<h1 class="text-3xl lg:text-4xl font-light text-center mb-8 text-muted-foreground">
 				Search the web. <span class="text-foreground">Get answers.</span>
 			</h1>

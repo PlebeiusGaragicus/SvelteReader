@@ -1,12 +1,13 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { X, MessageSquare, FileText, Link, PanelRightClose } from '@lucide/svelte';
+	import { X, MessageSquare, FileText, Link, PanelRightClose, PanelRightOpen } from '@lucide/svelte';
 	import {
 		synthArtifactStore,
 		synthThreadStore,
 		synthSourceStore,
 		synthWorkspaceStore,
-		type TabItem
+		type TabItem,
+		type TabType
 	} from '$lib/stores/synthesize';
 	import NewTabMenu from './NewTabMenu.svelte';
 
@@ -35,6 +36,10 @@
 		artifact,
 		source
 	}: Props = $props();
+
+	// Drag and drop state
+	let isDraggingOver = $state(false);
+	let isDraggingRightEdge = $state(false);
 
 	function getTabTitle(tab: TabItem): string {
 		if (tab.type === 'artifact') {
@@ -69,9 +74,93 @@
 		e.stopPropagation();
 		onTabClose(id);
 	}
+
+	// Drag and drop handlers
+	function handleDragStart(e: DragEvent, tabId: string, tabType: string) {
+		if (e.dataTransfer) {
+			e.dataTransfer.setData('application/svelte-tab-id', tabId);
+			e.dataTransfer.setData('application/svelte-tab-type', tabType);
+			e.dataTransfer.setData('application/svelte-tab-source-column', column);
+			e.dataTransfer.effectAllowed = 'move';
+		}
+	}
+
+	function handleDrop(e: DragEvent) {
+		e.preventDefault();
+		const wasDraggingRightEdge = isDraggingRightEdge;
+		isDraggingOver = false;
+		isDraggingRightEdge = false;
+
+		const id = e.dataTransfer?.getData('application/svelte-tab-id');
+		const type = e.dataTransfer?.getData('application/svelte-tab-type') as TabType | undefined;
+		const sourceColumn = e.dataTransfer?.getData('application/svelte-tab-source-column');
+
+		if (!id || !type) return;
+
+		// Determine target column
+		let targetColumn: 'left' | 'right' = column;
+		if (column === 'left' && synthWorkspaceStore.rightPanelCollapsed && wasDraggingRightEdge) {
+			targetColumn = 'right';
+		}
+
+		if (sourceColumn && (sourceColumn === 'left' || sourceColumn === 'right')) {
+			if (sourceColumn !== targetColumn) {
+				synthWorkspaceStore.moveTab(id, sourceColumn as 'left' | 'right', targetColumn);
+			}
+		} else {
+			// Sidebar drag or unknown source
+			synthWorkspaceStore.openItem(id, type, targetColumn);
+		}
+	}
+
+	function handleDragOver(e: DragEvent) {
+		e.preventDefault();
+		if (e.dataTransfer) {
+			e.dataTransfer.dropEffect = 'move';
+		}
+		isDraggingOver = true;
+
+		if (column === 'left' && synthWorkspaceStore.rightPanelCollapsed) {
+			const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+			const x = e.clientX - rect.left;
+			isDraggingRightEdge = x > rect.width * 0.8; // Right 20%
+		} else {
+			isDraggingRightEdge = false;
+		}
+	}
+
+	function handleDragLeave() {
+		isDraggingOver = false;
+		isDraggingRightEdge = false;
+	}
 </script>
 
-<div class="flex h-full flex-col bg-zinc-950">
+<div
+	class="relative flex h-full flex-col bg-zinc-950"
+	ondragover={handleDragOver}
+	ondragleave={handleDragLeave}
+	ondrop={handleDrop}
+	role="region"
+	aria-label="Tabbed workspace panel"
+>
+	<!-- Drag over overlay -->
+	{#if isDraggingOver}
+		<div
+			class="pointer-events-none absolute inset-0 z-50 border-2 border-violet-500/30 transition-all
+				{isDraggingRightEdge
+				? 'border-r-4 border-r-violet-500/50 bg-gradient-to-l from-violet-500/10 to-transparent'
+				: 'bg-violet-500/5'}"
+		>
+			{#if isDraggingRightEdge}
+				<div
+					class="absolute right-4 top-1/2 -translate-y-1/2 rounded bg-violet-500 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-white shadow-lg"
+				>
+					Split Right
+				</div>
+			{/if}
+		</div>
+	{/if}
+
 	<!-- Tab bar -->
 	<div class="flex h-10 items-center border-b border-zinc-800 bg-zinc-900/50">
 		<!-- Tabs and + button grouped together, scrolling if needed -->
@@ -84,6 +173,8 @@
 					role="tab"
 					tabindex="0"
 					aria-selected={activeTabId === tab.id}
+					draggable="true"
+					ondragstart={(e) => handleDragStart(e, tab.id, tab.type)}
 					class="group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-lg px-3 py-1.5 text-sm transition-colors {activeTabId ===
 					tab.id
 						? 'bg-zinc-800 text-zinc-100'
@@ -103,6 +194,17 @@
 			<!-- New tab button - positioned right after last tab -->
 			<NewTabMenu {column} />
 		</div>
+
+		<!-- Open right panel button (when left column and right is collapsed) -->
+		{#if column === 'left' && synthWorkspaceStore.rightPanelCollapsed}
+			<button
+				onclick={() => synthWorkspaceStore.toggleRightPanel()}
+				class="shrink-0 border-l border-zinc-800 px-3 py-2 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+				title="Open right panel"
+			>
+				<PanelRightOpen class="h-4 w-4" />
+			</button>
+		{/if}
 
 		<!-- Close panel button stays on the right -->
 		{#if showClosePanel && onClosePanel}
