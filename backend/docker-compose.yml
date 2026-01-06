@@ -1,0 +1,61 @@
+# SvelteReader Backend Stack
+# Run: docker-compose up -d
+
+services:
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sveltereader-backend
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      # SearXNG URL (internal Docker network)
+      - SEARXNG_URL=http://searxng:8080
+      # Firecrawl API key (set in .env file)
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-}
+      # CORS origins (comma-separated)
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173
+      # Cashu mint URL
+      - MINT_URL=${MINT_URL:-https://testnut.cashu.space}
+    volumes:
+      # Persist wallet database
+      - ./wallet_db:/app/wallet_db
+    depends_on:
+      searxng:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - sveltereader
+
+  # SearXNG Metasearch Engine
+  searxng:
+    image: searxng/searxng:latest
+    container_name: sveltereader-searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      # Custom configuration
+      - ./searxng:/etc/searxng:rw
+    environment:
+      # Override secret key in production
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-sveltereader-dev-secret}
+      # Base URL for links
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - sveltereader
+
+networks:
+  sveltereader:
+    name: sveltereader-network
+

@@ -12,14 +12,56 @@
 
   - **`docs/`** - our MKDocs documentation hosted on Github Pages
   - **`frontend/`** - Svelte 5 web app
-  - **`backend/`** - FastAPI backend for accepting payments - used by our LangGraph agents for payment validation
+  - **`backend/`** - FastAPI backend for accepting payments - used by our LangGraph agents for payment validation and redemption
   - **`agent/`** - Self-hosted LangGraph agents for AI chat
 
   - **`cyphertap`** is our fork of the repository since its `npm` library is out-of-date.  We build from and use our local submodule since it has new features not included in the origional repository. **Changes may be made to this submodule in order to further bugfix/develop its features!**
+
+## Reference repositories
+
   - **`nutshell/`** a python library which handles self-custody ecash wallets - it is used in our FastAPI backend/ to store user's funds which were spent to pay for usage of our agents.
+
   - **`deepagents/`** is a LangGraph library which demonstrates a `deepagent` whose capabilities can be extended with `Middleware`.  We custom-build out own agents using `create_agent()` similarly to the deepagent library.
+
   - **`deep-agent-ui`** is another React frontend that demonstrates a chat UI between a user and a LangGraph `deepagent` capable of tool calling.
+
   - **`fullstack-chat-client`** is an example React frontend for demonstrating a chat UI between a user and LangGraph agent capable of tool calling.
+
+  - **`nips`** contain the *Nostr Implementation Possibilities* which attempt to specify the nostr protocol and are a great reference to guide our own implementation
+
+  - **`chat-langchain`** contains a "production" example of a working reserach/reference agentic frontend using LangGraph Cloud
+
+  - **`perplexica`** contains an example Perplexity-clone which includes a simple web-search and AI-enhanced article aggregator
+
+### `git clone`
+
+NOTE: these 'reference repositories' may be cloned in the references/ directory so that they're available for review
+
+```sh
+cd references
+
+### fullstack-chat-client
+git clone https://github.com/PlebeiusGaragicus/fullstack-chat-client
+
+### deepagents
+git clone https://github.com/langchain-ai/deepagents
+
+### deep-agents-ui
+git clone https://github.com/langchain-ai/deep-agents-ui
+
+### nutshell
+git clone https://github.com/cashubtc/nutshell
+
+### nips
+git clone https://github.com/nostr-protocol/nips.git
+
+### chat-langchain
+git clone https://github.com/langchain-ai/chat-langchain.git
+
+### perplexica
+git clone https://github.com/ItzCrazyKns/Perplexica.git
+```
+
 
 ---
 

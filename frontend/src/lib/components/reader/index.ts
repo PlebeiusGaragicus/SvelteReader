@@ -6,3 +6,9 @@ export { default as SettingsPanel } from './SettingsPanel.svelte';
 export { default as ProgressBar } from './ProgressBar.svelte';
 export { default as AnnotationPopup } from './AnnotationPopup.svelte';
 export { default as SyncStatusButton } from './SyncStatusButton.svelte';
+
+// File management components
+export { default as FileCard } from './FileCard.svelte';
+export { default as FileUploadButton } from './FileUploadButton.svelte';
+export { default as FileViewer } from './FileViewer.svelte';
+export { default as FileEditModal } from './FileEditModal.svelte';

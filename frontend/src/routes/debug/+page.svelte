@@ -168,7 +168,7 @@
 </script>
 
 <svelte:head>
-	<title>Debug - Nostr Events</title>
+	<title>SvelteReader | Debug</title>
 </svelte:head>
 
 <div class="min-h-screen bg-background p-6">

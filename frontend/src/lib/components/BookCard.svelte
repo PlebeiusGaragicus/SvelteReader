@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { MoreVertical, Trash2, BookOpen, Ghost, BookX, MessageSquareX, X, Upload, Pencil, Globe, AlertCircle, Plus, HardDrive } from '@lucide/svelte';
-	import type { Book } from '$lib/stores/books';
-	import { books } from '$lib/stores/books';
-	import { annotations } from '$lib/stores/annotations';
+	import type { Book } from '$lib/stores/books.svelte';
+	import { books } from '$lib/stores/books.svelte';
+	import { annotations } from '$lib/stores/annotations.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { removeEpubData, storeEpubData, storeBook, computeSha256 } from '$lib/services/storageService';
 	import BookAnnouncementModal from './BookAnnouncementModal.svelte';

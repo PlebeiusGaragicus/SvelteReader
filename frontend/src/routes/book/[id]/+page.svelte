@@ -3,8 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { onMount, onDestroy } from 'svelte';
 	import { mode } from 'mode-watcher';
-	import { books } from '$lib/stores/books';
-	import { annotations } from '$lib/stores/annotations';
+	import { books } from '$lib/stores/books.svelte';
+	import { annotations } from '$lib/stores/annotations.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 	import { indexingStore } from '$lib/stores/indexing.svelte';
 	import { getEpubData, getEpubDataBySha256 } from '$lib/services/storageService';
@@ -27,15 +27,16 @@
 	import { useWalletStore } from '$lib/stores/wallet.svelte';
 	import { syncStore } from '$lib/stores/sync.svelte';
 	import { getThreads } from '$lib/services/langgraph';
+	import { useSettingsStore } from '$lib/stores/settings.svelte';
 	
 	// Check if we're in spectate mode (view-only)
 	const isSpectating = $derived(spectateStore.isSpectating);
 
 	const bookId = $derived($page.params.id);
-	const book = $derived($books.find((b) => b.id === bookId));
+	const book = $derived(books.items.find((b) => b.id === bookId));
 	
 	// Get annotations for this book (reactive)
-	const bookAnnotations = $derived(book ? $annotations.filter(a => a.bookSha256 === book.sha256) : []);
+	const bookAnnotations = $derived(book ? annotations.items.filter(a => a.bookSha256 === book.sha256) : []);
 
 	// Panel visibility state
 	let showTOC = $state(false);
@@ -136,6 +137,7 @@
 
 	// Wallet store for payment integration
 	const wallet = useWalletStore();
+	const readerSettings = useSettingsStore();
 
 	// Sync wallet state with CypherTap
 	$effect(() => {
@@ -181,6 +183,22 @@
 			epubService.applyTheme(mode.current === 'dark' ? 'dark' : 'light');
 		}
 	});
+
+	// Apply reader settings when book is ready or settings change
+	$effect(() => {
+		if (isBookReady) {
+			epubService.applyFontSize(readerSettings.fontSize);
+			epubService.applyFontFamily(readerSettings.fontFamily);
+		}
+	});
+
+	// Callback to re-apply settings when changed from settings panel
+	function handleSettingsChange() {
+		if (isBookReady) {
+			epubService.applyFontSize(readerSettings.fontSize);
+			epubService.applyFontFamily(readerSettings.fontFamily);
+		}
+	}
 
 	// Reload annotations in epub reader when store changes (e.g., after sync)
 	$effect(() => {
@@ -291,7 +309,7 @@
 		await annotations.initialize(userPubkey || undefined);
 
 		// Re-check for book after initialization
-		const currentBooks = $books;
+		const currentBooks = books.items;
 		const foundBook = currentBooks.find((b) => b.id === bookId);
 		
 		if (!foundBook) {
@@ -351,7 +369,7 @@
 			}
 
 			// Load existing annotations as highlights
-			const currentAnnotations = $annotations.filter(a => a.bookSha256 === foundBook.sha256);
+			const currentAnnotations = annotations.items.filter(a => a.bookSha256 === foundBook.sha256);
 			if (currentAnnotations.length > 0) {
 				epubService.loadAnnotations(currentAnnotations);
 			}
@@ -479,11 +497,17 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === 'ArrowLeft') {
+		// Don't intercept keyboard events when user is typing in an input or textarea
+		const target = event.target as HTMLElement;
+		const isTyping = target.tagName === 'INPUT' || 
+			target.tagName === 'TEXTAREA' || 
+			target.isContentEditable;
+		
+		if (event.key === 'ArrowLeft' && !isTyping) {
 			handlePrevPage();
 			// Close popup on page turn
 			handlePopupClose();
-		} else if (event.key === 'ArrowRight') {
+		} else if (event.key === 'ArrowRight' && !isTyping) {
 			handleNextPage();
 			// Close popup on page turn
 			handlePopupClose();
@@ -638,6 +662,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>{book ? `SvelteReader | ${book.title}` : 'SvelteReader | Reader'}</title>
+</svelte:head>
+
 <svelte:window onkeydown={handleKeydown} />
 
 {#if loadError}
@@ -647,7 +675,7 @@
 			<p class="text-sm text-muted-foreground">The book data may have been cleared from your browser.</p>
 		{/if}
 		<button
-			onclick={() => goto('/')}
+			onclick={() => goto('/reader')}
 			class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
 		>
 			Back to Library
@@ -708,7 +736,7 @@
 						View Annotations ({bookAnnotations.length})
 					</button>
 					<button
-						onclick={() => goto('/')}
+						onclick={() => goto('/reader')}
 						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
 					>
 						Back to Library
@@ -727,7 +755,7 @@
 		{/if}
 		
 		{#if showSettings}
-			<SettingsPanel onClose={() => (showSettings = false)} />
+			<SettingsPanel onClose={() => (showSettings = false)} onSettingsChange={handleSettingsChange} />
 		{/if}
 	</div>
 {:else if !book}
@@ -806,7 +834,7 @@
 		{/if}
 
 		{#if showSettings}
-			<SettingsPanel onClose={() => (showSettings = false)} />
+			<SettingsPanel onClose={() => (showSettings = false)} onSettingsChange={handleSettingsChange} />
 		{/if}
 
 		{#if textSelection || editingAnnotation}

@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { get } from 'svelte/store';
 
 // Mock the browser environment check
 vi.mock('$app/environment', () => ({
@@ -12,24 +11,43 @@ vi.mock('$lib/services/storageService', () => ({
 	storeBook: vi.fn(),
 	getBook: vi.fn(),
 	getAllBooks: vi.fn().mockResolvedValue([]),
+	getBooksWithEpubData: vi.fn().mockResolvedValue([]),
+	getBookBySha256ForOwner: vi.fn().mockResolvedValue(null),
 	deleteBook: vi.fn(),
 	getAnnotationsByBook: vi.fn().mockResolvedValue([]),
 	deleteAnnotationsByBook: vi.fn(),
 	storeAnnotation: vi.fn(),
 	getAnnotation: vi.fn(),
 	getAllAnnotations: vi.fn().mockResolvedValue([]),
-	deleteAnnotation: vi.fn()
+	deleteAnnotation: vi.fn(),
+	getBookBySha256: vi.fn().mockResolvedValue(null)
+}));
+
+// Mock nostr service
+vi.mock('$lib/services/nostrService', () => ({
+	publishBook: vi.fn().mockResolvedValue({ success: true }),
+	publishBookDeletion: vi.fn().mockResolvedValue({ success: true }),
+	publishAnnotation: vi.fn().mockResolvedValue({ success: true }),
+	publishAnnotationDeletion: vi.fn().mockResolvedValue({ success: true })
+}));
+
+// Mock nostr types
+vi.mock('$lib/types/nostr', () => ({
+	getDefaultRelays: vi.fn().mockReturnValue(['wss://relay.example.com'])
 }));
 
 // Import after mocks are set up
-const { books } = await import('./books');
-const { annotations } = await import('./annotations');
+const { books } = await import('./books.svelte');
+const { annotations } = await import('./annotations.svelte');
 
 describe('books store', () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		// Reset stores before each test
 		books.reset();
 		annotations.reset();
+		// Initialize with a test owner pubkey
+		await books.initialize('test-owner-pubkey');
+		await annotations.initialize('test-owner-pubkey');
 	});
 
 	describe('add', () => {
@@ -45,9 +63,8 @@ describe('books store', () => {
 			});
 
 			expect(bookId).toBeDefined();
-			expect(bookId).toContain('test-uuid-');
 
-			const allBooks = get(books);
+			const allBooks = books.items;
 			expect(allBooks).toHaveLength(1);
 			expect(allBooks[0].title).toBe('Test Book');
 			expect(allBooks[0].author).toBe('Test Author');
@@ -68,11 +85,11 @@ describe('books store', () => {
 				hasEpubData: true
 			});
 
-			expect(get(books)).toHaveLength(1);
+			expect(books.items).toHaveLength(1);
 
 			await books.remove(bookId);
 
-			expect(get(books)).toHaveLength(0);
+			expect(books.items).toHaveLength(0);
 		});
 	});
 
@@ -90,7 +107,7 @@ describe('books store', () => {
 
 			await books.updateProgress(bookId, 50, 'epubcfi(/test)');
 
-			const allBooks = get(books);
+			const allBooks = books.items;
 			expect(allBooks[0].currentPage).toBe(50);
 			expect(allBooks[0].progress).toBe(50);
 			expect(allBooks[0].currentCfi).toBe('epubcfi(/test)');
@@ -109,18 +126,20 @@ describe('books store', () => {
 				hasEpubData: true
 			});
 
-			expect(get(books)).toHaveLength(1);
+			expect(books.items).toHaveLength(1);
 
 			books.reset();
 
-			expect(get(books)).toHaveLength(0);
+			expect(books.items).toHaveLength(0);
 		});
 	});
 });
 
 describe('annotations store', () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		annotations.reset();
+		// Initialize with a test owner pubkey
+		await annotations.initialize('test-owner-pubkey');
 	});
 
 	describe('upsert', () => {
@@ -140,7 +159,7 @@ describe('annotations store', () => {
 			expect(annotation.highlightColor).toBe('yellow');
 			expect(annotation.createdAt).toBeDefined();
 
-			const allAnnotations = get(annotations);
+			const allAnnotations = annotations.items;
 			expect(allAnnotations).toHaveLength(1);
 		});
 
@@ -164,7 +183,7 @@ describe('annotations store', () => {
 				}
 			);
 
-			const allAnnotations = get(annotations);
+			const allAnnotations = annotations.items;
 			expect(allAnnotations).toHaveLength(1);
 			expect(allAnnotations[0].highlightColor).toBe('blue');
 			expect(allAnnotations[0].note).toBe('Added a note');
@@ -182,11 +201,11 @@ describe('annotations store', () => {
 				}
 			);
 
-			expect(get(annotations)).toHaveLength(1);
+			expect(annotations.items).toHaveLength(1);
 
 			await annotations.remove('book-sha256', 'epubcfi(/test/range)');
 
-			expect(get(annotations)).toHaveLength(0);
+			expect(annotations.items).toHaveLength(0);
 		});
 	});
 
@@ -203,7 +222,7 @@ describe('annotations store', () => {
 
 			await annotations.addChatThread('book-sha256', 'epubcfi(/test/range)', 'thread-1');
 
-			const allAnnotations = get(annotations);
+			const allAnnotations = annotations.items;
 			expect(allAnnotations[0].chatThreadIds).toContain('thread-1');
 		});
 
@@ -220,7 +239,7 @@ describe('annotations store', () => {
 
 			await annotations.removeChatThread('book-sha256', 'epubcfi(/test/range)', 'thread-1');
 
-			const allAnnotations = get(annotations);
+			const allAnnotations = annotations.items;
 			expect(allAnnotations[0].chatThreadIds).not.toContain('thread-1');
 			expect(allAnnotations[0].chatThreadIds).toContain('thread-2');
 		});

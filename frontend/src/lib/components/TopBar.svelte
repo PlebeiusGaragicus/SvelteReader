@@ -4,6 +4,7 @@
 	import { browser } from '$app/environment';
 	import SyncStatusButton from './reader/SyncStatusButton.svelte';
 	import SpectateButton from './SpectateButton.svelte';
+	import ModeSelector from './ModeSelector.svelte';
 	import { spectateStore } from '$lib/stores/spectate.svelte';
 </script>
 
@@ -14,6 +15,8 @@
 				<BookOpen class="h-6 w-6" />
 				<span class="text-xl font-bold">SvelteReader</span>
 			</a>
+			<span class="text-muted-foreground/40">|</span>
+			<ModeSelector />
 		</div>
 
 		<div class="flex items-center gap-2">

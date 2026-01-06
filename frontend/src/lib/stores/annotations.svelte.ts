@@ -1,4 +1,10 @@
-import { writable, derived, get } from 'svelte/store';
+/**
+ * Annotations Store - Reactive store for book annotations using Svelte 5 runes
+ * 
+ * Manages highlights, notes, and chat threads attached to book passages.
+ * Includes IndexedDB persistence and Nostr sync.
+ */
+
 import { browser } from '$app/environment';
 import {
 	storeAnnotation,
@@ -22,12 +28,12 @@ import {
 } from '$lib/types';
 import { getDefaultRelays } from '$lib/types/nostr';
 
-// In-memory store for annotations
-const { subscribe, set, update } = writable<AnnotationLocal[]>([]);
+// Reactive state using Svelte 5 runes
+let annotationsState = $state<AnnotationLocal[]>([]);
 
 // Track if store has been initialized from IndexedDB
-let initialized = false;
-let currentOwnerPubkey: string | null = null;
+let initialized = $state(false);
+let currentOwnerPubkey = $state<string | null>(null);
 
 // CypherTap instance for Nostr publishing
 let cyphertapInstance: CyphertapPublisher | null = null;
@@ -48,12 +54,12 @@ async function initializeStore(ownerPubkey?: string): Promise<void> {
 	try {
 		currentOwnerPubkey = ownerPubkey || null;
 		if (ownerPubkey) {
-			const annotations = await getAllAnnotations(ownerPubkey);
-			set(annotations);
-			console.log(`[Annotations] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${annotations.length} annotations`);
+			const loadedAnnotations = await getAllAnnotations(ownerPubkey);
+			annotationsState = loadedAnnotations;
+			console.log(`[Annotations] Initialized for user ${ownerPubkey.slice(0, 8)}...: ${loadedAnnotations.length} annotations`);
 		} else {
 			// No user logged in - empty annotations
-			set([]);
+			annotationsState = [];
 			console.log('[Annotations] No user logged in, annotations empty');
 		}
 		initialized = true;
@@ -78,8 +84,7 @@ async function upsertAnnotation(
 	await ensureInitialized();
 	
 	const key = getAnnotationKey(bookSha256, cfiRange);
-	const currentAnnotations = get({ subscribe });
-	const existing = currentAnnotations.find(
+	const existing = annotationsState.find(
 		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
 	);
 	
@@ -143,17 +148,18 @@ async function upsertAnnotation(
 	}
 	
 	// Update in-memory store
-	update(annotations => {
-		const index = annotations.findIndex(
-			a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
-		);
-		if (index >= 0) {
-			annotations[index] = annotation;
-			return [...annotations];
-		} else {
-			return [...annotations, annotation];
-		}
-	});
+	const index = annotationsState.findIndex(
+		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
+	);
+	if (index >= 0) {
+		annotationsState = [
+			...annotationsState.slice(0, index),
+			annotation,
+			...annotationsState.slice(index + 1)
+		];
+	} else {
+		annotationsState = [...annotationsState, annotation];
+	}
 	
 	return annotation;
 }
@@ -163,16 +169,15 @@ async function removeAnnotation(bookSha256: string, cfiRange: string): Promise<v
 	await ensureInitialized();
 	
 	// Get the annotation before deleting to check if it was published
-	const currentAnnotations = get({ subscribe });
-	const existing = currentAnnotations.find(
+	const existing = annotationsState.find(
 		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
 	);
 	
 	await deleteAnnotationFromDB(bookSha256, cfiRange);
 	
 	// Update store immediately (optimistic update) so UI reflects deletion right away
-	update(annotations =>
-		annotations.filter(a => !(a.bookSha256 === bookSha256 && a.cfiRange === cfiRange))
+	annotationsState = annotationsState.filter(
+		a => !(a.bookSha256 === bookSha256 && a.cfiRange === cfiRange)
 	);
 	
 	// Publish deletion to Nostr in background if the annotation was previously published
@@ -191,16 +196,12 @@ async function removeAnnotationsForBook(bookSha256: string): Promise<void> {
 	
 	await deleteAnnotationsByBook(bookSha256);
 	
-	update(annotations =>
-		annotations.filter(a => a.bookSha256 !== bookSha256)
-	);
+	annotationsState = annotationsState.filter(a => a.bookSha256 !== bookSha256);
 }
 
-// Get annotations for a specific book (derived store)
-function getBookAnnotations(bookSha256: string) {
-	return derived({ subscribe }, $annotations =>
-		$annotations.filter(a => a.bookSha256 === bookSha256)
-	);
+// Get annotations for a specific book (returns filtered array - for use within reactive contexts)
+function getBookAnnotations(bookSha256: string): AnnotationLocal[] {
+	return annotationsState.filter(a => a.bookSha256 === bookSha256);
 }
 
 // Add a chat thread to an annotation
@@ -211,8 +212,7 @@ async function addChatThread(
 ): Promise<void> {
 	await ensureInitialized();
 	
-	const currentAnnotations = get({ subscribe });
-	const existing = currentAnnotations.find(
+	const existing = annotationsState.find(
 		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
 	);
 	
@@ -238,8 +238,7 @@ async function removeChatThread(
 ): Promise<void> {
 	await ensureInitialized();
 	
-	const currentAnnotations = get({ subscribe });
-	const existing = currentAnnotations.find(
+	const existing = annotationsState.find(
 		a => a.bookSha256 === bookSha256 && a.cfiRange === cfiRange
 	);
 	
@@ -262,13 +261,12 @@ async function mergeFromNostr(remoteAnnotations: Annotation[]): Promise<{ merged
 	
 	let merged = 0;
 	let conflicts = 0;
-	const currentAnnotations = get({ subscribe });
 	
 	console.log(`[Annotations] Merging ${remoteAnnotations.length} remote annotations...`);
 	
 	for (const remote of remoteAnnotations) {
 		const key = getAnnotationKey(remote.bookSha256, remote.cfiRange);
-		const local = currentAnnotations.find(
+		const local = annotationsState.find(
 			a => a.bookSha256 === remote.bookSha256 && a.cfiRange === remote.cfiRange
 		);
 		
@@ -287,7 +285,7 @@ async function mergeFromNostr(remoteAnnotations: Annotation[]): Promise<{ merged
 				syncPending: false,
 			};
 			await storeAnnotation(newAnnotation);
-			update(annotations => [...annotations, newAnnotation]);
+			annotationsState = [...annotationsState, newAnnotation];
 			merged++;
 		} else {
 			// Existing annotation - use LWW (Last Write Wins)
@@ -307,16 +305,16 @@ async function mergeFromNostr(remoteAnnotations: Annotation[]): Promise<{ merged
 					syncPending: false,
 				};
 				await storeAnnotation(updatedAnnotation);
-				update(annotations => {
-					const index = annotations.findIndex(
-						a => a.bookSha256 === remote.bookSha256 && a.cfiRange === remote.cfiRange
-					);
-					if (index >= 0) {
-						annotations[index] = updatedAnnotation;
-						return [...annotations];
-					}
-					return annotations;
-				});
+				const index = annotationsState.findIndex(
+					a => a.bookSha256 === remote.bookSha256 && a.cfiRange === remote.cfiRange
+				);
+				if (index >= 0) {
+					annotationsState = [
+						...annotationsState.slice(0, index),
+						updatedAnnotation,
+						...annotationsState.slice(index + 1)
+					];
+				}
 				merged++;
 				conflicts++;
 			} else {
@@ -332,12 +330,16 @@ async function mergeFromNostr(remoteAnnotations: Annotation[]): Promise<{ merged
 
 // Reset store (for testing/clearing data)
 function reset(): void {
-	set([]);
+	annotationsState = [];
 	initialized = false;
 }
 
+// Export reactive getters and actions
 export const annotations = {
-	subscribe,
+	// Reactive getter for all annotations
+	get items() { return annotationsState; },
+	
+	// Actions
 	initialize: initializeStore,
 	upsert: upsertAnnotation,
 	remove: removeAnnotation,
@@ -349,3 +351,4 @@ export const annotations = {
 	mergeFromNostr,
 	reset
 };
+

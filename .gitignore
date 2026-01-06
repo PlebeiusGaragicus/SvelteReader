@@ -9,6 +9,8 @@ __pycache__/
 venv_*/
 *.egg-info/
 
+references/
+
 .langgraph_api/
 .env
 *.json
