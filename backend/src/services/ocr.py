@@ -10,6 +10,7 @@ Environment Variables:
 """
 
 import os
+import re
 from typing import Optional
 
 import httpx
@@ -62,6 +63,34 @@ def is_configured() -> bool:
 def get_model_name() -> Optional[str]:
     """Get the configured OCR model name."""
     return os.getenv("OCR_MODEL")
+
+
+def clean_ocr_response(text: str) -> str:
+    """Clean up LLM response by removing reasoning/thinking tags and special tokens.
+    
+    Removes:
+    - <think>...</think> blocks (test-time compute/reasoning)
+    - Various box tokens: <|beginofbox|>, <|begin_of_box|>, <|endofbox|>, <|end_of_box|>
+    - Other common special tokens
+    """
+    # Remove <think>...</think> blocks entirely (including content)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Remove box tags (with and without underscores) - keep content between them
+    box_patterns = [
+        r'<\|begin_?of_?box\|>',   # <|beginofbox|>, <|begin_of_box|>, etc.
+        r'<\|end_?of_?box\|>',     # <|endofbox|>, <|end_of_box|>, etc.
+        r'<\|box_start\|>',
+        r'<\|box_end\|>',
+    ]
+    for pattern in box_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+    # Clean up any extra whitespace left behind
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
+    text = text.strip()
+    
+    return text
 
 
 def convert_to_png_base64(image_data: str) -> str:
@@ -171,6 +200,9 @@ async def ocr_image(image_data: str) -> str:
         
         if not content:
             raise Exception("No content in OCR response")
+        
+        # Clean up LLM artifacts (thinking tags, special tokens)
+        content = clean_ocr_response(content)
         
         return content
 

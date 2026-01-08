@@ -9,6 +9,7 @@
 
 import { settingsStore } from '$lib/stores/settings.svelte';
 import type { UserFile, OcrVersion } from '$lib/stores/userFiles.svelte';
+import { loadPdf, renderPageToImage } from '$lib/services/pdfService';
 
 // =============================================================================
 // TYPES
@@ -59,35 +60,6 @@ function arrayBufferToBase64DataUrl(buffer: ArrayBuffer | Uint8Array, mimeType: 
 	return `data:${mimeType};base64,${base64}`;
 }
 
-/**
- * Render a PDF page to a base64 PNG data URL
- */
-async function renderPdfPageToImage(
-	pdf: import('pdfjs-dist').PDFDocumentProxy,
-	pageNum: number,
-	scale: number = 2.0
-): Promise<string> {
-	const page = await pdf.getPage(pageNum);
-	const viewport = page.getViewport({ scale });
-	
-	const canvas = document.createElement('canvas');
-	canvas.width = viewport.width;
-	canvas.height = viewport.height;
-	
-	const context = canvas.getContext('2d');
-	if (!context) {
-		throw new Error('Failed to get canvas context');
-	}
-	
-	await page.render({
-		canvasContext: context,
-		viewport: viewport,
-		canvas: canvas as unknown as HTMLCanvasElement
-	}).promise;
-	
-	// Convert to PNG data URL
-	return canvas.toDataURL('image/png');
-}
 
 /**
  * Call the backend OCR API for a single image
@@ -189,21 +161,8 @@ async function ocrPdf(
 	file: UserFile,
 	onProgress?: (progress: OcrProgress) => void
 ): Promise<OcrVersion> {
-	// Dynamic import to avoid SSR issues
-	const pdfjs = await import('pdfjs-dist');
-	
-	// Set up worker
-	if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-		pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
-	}
-	
-	// Load the PDF
-	const content = file.content instanceof Uint8Array 
-		? file.content 
-		: new Uint8Array(file.content);
-	
-	const loadingTask = pdfjs.getDocument({ data: content });
-	const pdf = await loadingTask.promise;
+	// Load the PDF using centralized pdfService
+	const pdf = await loadPdf(file.content);
 	const totalPages = pdf.numPages;
 	
 	// Step 1: Render all pages to images
@@ -216,7 +175,7 @@ async function ocrPdf(
 			status: 'rendering',
 		});
 		
-		const imageDataUrl = await renderPdfPageToImage(pdf, pageNum);
+		const imageDataUrl = await renderPageToImage(pdf, pageNum);
 		imageDataUrls.push(imageDataUrl);
 	}
 	

@@ -453,20 +453,11 @@ async function createThumbnail(file: File, type: FileType, arrayBuffer?: ArrayBu
 		}
 	}
 	
-	// PDF thumbnail generation using pdfjs-dist
+	// PDF thumbnail generation using pdfService
 	if (type === 'pdf' && arrayBuffer) {
 		try {
-			// Dynamic import to avoid SSR issues
-			const pdfjs = await import('pdfjs-dist');
-			
-			// Set up worker
-			if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-				pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
-			}
-			
-			// Load PDF
-			const loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
-			const pdf = await loadingTask.promise;
+			const { loadPdf } = await import('$lib/services/pdfService');
+			const pdf = await loadPdf(arrayBuffer);
 			const page = await pdf.getPage(1);
 			
 			// Render at scale for good quality
@@ -482,7 +473,8 @@ async function createThumbnail(file: File, type: FileType, arrayBuffer?: ArrayBu
 			
 			await page.render({
 				canvasContext: context,
-				viewport: viewport
+				viewport: viewport,
+				canvas: canvas as unknown as HTMLCanvasElement
 			}).promise;
 			
 			// Crop to 2:3 aspect ratio (like book covers)
@@ -531,17 +523,11 @@ async function extractTextContent(file: File, type: FileType, arrayBuffer?: Arra
 		return { text, preview: preview + (text.length > 200 ? '...' : '') };
 	}
 	
-	// PDF text extraction using pdfjs-dist
+	// PDF text extraction using pdfService
 	if (type === 'pdf' && arrayBuffer) {
 		try {
-			const pdfjs = await import('pdfjs-dist');
-			
-			if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-				pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`;
-			}
-			
-			const loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
-			const pdf = await loadingTask.promise;
+			const { loadPdf } = await import('$lib/services/pdfService');
+			const pdf = await loadPdf(arrayBuffer);
 			
 			let fullText = '';
 			const maxPages = Math.min(pdf.numPages, 5);
