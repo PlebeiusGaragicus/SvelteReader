@@ -1,21 +1,17 @@
 [project]
-name = "sveltereader-backend"
+name = "sveltereader-payments"
 version = "0.0.1"
-description = "AI backend for SvelteReader - search, suggestions, and OCR"
+description = "Cashu payments service for SvelteReader"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.115.14",
+    "fastapi>=0.109.0,<0.115.0",
     "uvicorn[standard]",
-    "langgraph-sdk>=0.1.36",
     "python-dotenv",
-    "httpx",
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
-    "sse-starlette",
-    "langchain-openai>=0.3.0",
-    "pillow>=10.0.0",
+    "pydantic>=1.10.2,<2.0.0",
+    "marshmallow>=3.13,<4.0",
+    "cashu>=0.18.2",
 ]
 
 [project.optional-dependencies]

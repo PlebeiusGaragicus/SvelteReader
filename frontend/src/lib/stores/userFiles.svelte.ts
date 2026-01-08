@@ -21,7 +21,7 @@ export interface OcrVersion {
 	id: string;                              // Unique ID for this OCR version
 	
 	// Generation metadata for transparency and reproducibility
-	model: string;                           // e.g., "gpt-4o", "claude-sonnet-4", "tesseract"
+	model: string;                           // e.g., "glm-4.6v-flash", "claude-sonnet-4", "tesseract"
 	provider?: string;                       // e.g., "openai", "anthropic", "local"
 	modelVersion?: string;                   // Specific model version if known
 	generatedAt: number;                     // Unix timestamp (ms)

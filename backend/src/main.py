@@ -1,11 +1,12 @@
-"""FastAPI backend for SvelteReader.
+"""FastAPI backend for SvelteReader AI services.
 
 This backend handles:
-- Wallet/ecash operations for the pay-per-use model
 - Web search proxy (SearXNG) for Web Scrape mode
 - URL scraping (Firecrawl) for content extraction
+- AI-powered suggestions
+- OCR via vision models
 
-Chat functionality goes directly between the frontend and LangGraph server.
+Payments are handled by a separate service (payments/) for security isolation.
 """
 
 import os
@@ -14,15 +15,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.routers import wallet, search, suggestions
-from src.services.wallet import initialize_wallet
+from src.routers import search, suggestions, ocr
 from src.services.search import cleanup_clients
 
 load_dotenv()
 
 app = FastAPI(
-    title="SvelteReader API",
-    description="Backend API for SvelteReader wallet operations",
+    title="SvelteReader AI API",
+    description="AI backend API for SvelteReader",
     version="0.0.1",
 )
 
@@ -47,17 +47,15 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(wallet.router, prefix="/api/wallet", tags=["wallet"])
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(suggestions.router, prefix="/api", tags=["suggestions"])
+app.include_router(ocr.router, prefix="/api", tags=["ocr"])
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup."""
-    print("[Startup] Initializing wallet service...")
-    await initialize_wallet()
-    print("[Startup] Wallet service ready")
+    print("[Startup] AI backend ready")
     print("[Startup] Search service ready")
 
 
@@ -72,14 +70,14 @@ async def shutdown_event():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy"}
+    return {"status": "healthy", "service": "ai-backend"}
 
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {
-        "message": "SvelteReader API",
+        "message": "SvelteReader AI API",
         "docs": "/docs",
         "health": "/health",
     }

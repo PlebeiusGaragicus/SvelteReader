@@ -84,7 +84,7 @@ async def generate_suggestions(request: SuggestionsRequest) -> SuggestionsRespon
             client = AsyncOpenAI(api_key=openai_api_key)
             
             response = await client.chat.completions.create(
-                model="gpt-4o-mini",  # Fast and cheap for suggestions
+                model=" glm-4.6v-flash",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that generates search suggestions."},
                     {"role": "user", "content": prompt}

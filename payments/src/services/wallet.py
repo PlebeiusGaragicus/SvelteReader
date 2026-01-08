@@ -257,7 +257,7 @@ def get_wallet_service() -> WalletService:
                 "Without it, funds cannot be recovered if the database is lost.\n\n"
                 "To fix this:\n"
                 "1. Generate a mnemonic at: https://iancoleman.io/bip39/\n"
-                "2. Add to backend/.env: WALLET_MNEMONIC=word1 word2 word3 ...\n"
+                "2. Add to payments/.env: WALLET_MNEMONIC=word1 word2 word3 ...\n"
                 "3. BACK UP YOUR MNEMONIC SECURELY!\n"
                 "=" * 60
             )

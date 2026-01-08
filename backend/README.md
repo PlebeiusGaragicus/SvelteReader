@@ -1,101 +1,76 @@
-# SvelteReader Backend
+# SvelteReader AI Backend
 
-FastAPI backend that interfaces between the Svelte frontend and the self-hosted LangGraph agent.
+FastAPI backend for AI-powered features: search, suggestions, and OCR.
 
 ## Architecture
 
 ```
-Svelte Frontend (5173) → FastAPI Backend (8000) → LangGraph Agent (2024)
+Svelte Frontend (5173) → AI Backend (8000) → LLM APIs
+                      → Payments Service (8001) → Cashu Mints
 ```
 
-The backend serves as a middleware layer that:
-- Routes chat messages to the LangGraph agent
-- Handles business logic (payment verification, rate limiting)
-- Manages conversation threads
-- Streams responses back to the frontend
+This backend handles:
+- Web search via SearXNG
+- URL scraping via Firecrawl
+- AI-powered suggestions
+- OCR via vision models (OpenAI-compatible)
+
+**Note**: Payments are handled by a separate service (`payments/`) for security isolation.
 
 ## Setup
 
-1. Install dependencies:
-
-NOTE: ⚠️ you'll also need to run `brew install` or `apt-get install` for `pkg-config` as it's needed by `secp256k1`
-
+1. Create a virtual environment:
 ```bash
-cd backend
+python -m venv venv
+source venv/bin/activate
+```
+
+2. Install dependencies:
+```bash
 pip install -e .
 ```
 
-2. Configure environment:
-
+3. Configure environment:
 ```bash
 cp .env.example .env
-# Edit .env as needed
+# Edit .env with your API keys
 ```
 
-3. Start the LangGraph agent first (in the `agent/` directory):
-
-```bash
-cd ../agent
-langgraph dev
+Required environment variables for OCR:
+```
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_API_KEY=your_key_here
+OCR_MODEL=your-vision-model-name
 ```
 
-4. Start the FastAPI server:
-
+4. Start the server:
 ```bash
-cd ../backend
 uvicorn src.main:app --reload --port 8000
 ```
 
 ## API Endpoints
 
-### Chat
+### Search
+- `POST /api/search` - Web search via SearXNG
+- `GET /api/discover` - Discovery feed by topic
+- `GET /api/topics` - Available discovery topics
+- `POST /api/scrape` - Scrape URL content
 
-- `POST /api/chat/message` - Send a message and get a complete response
-- `POST /api/chat/message/stream` - Send a message and stream the response (SSE)
-- `POST /api/chat/thread` - Create a new conversation thread
-- `GET /api/chat/thread/{thread_id}` - Get thread state
-- `DELETE /api/chat/thread/{thread_id}` - Delete a thread
+### Suggestions
+- `POST /api/suggestions` - Generate follow-up questions
+
+### OCR
+- `POST /api/ocr` - OCR a single image
+- `POST /api/ocr/batch` - OCR multiple images (PDF pages)
+- `GET /api/ocr/status` - Check OCR service availability
 
 ### Health
-
 - `GET /health` - Health check
 - `GET /` - API info
-
-## Request/Response Examples
-
-### Send Message (Non-streaming)
-
-```bash
-curl -X POST http://localhost:8000/api/chat/message \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "What does this passage mean?",
-    "passage_context": {
-      "text": "It was the best of times, it was the worst of times...",
-      "book_title": "A Tale of Two Cities",
-      "note": "Famous opening line"
-    }
-  }'
-```
-
-### Send Message (Streaming)
-
-```bash
-curl -X POST http://localhost:8000/api/chat/message/stream \
-  -H "Content-Type: application/json" \
-  -d '{
-    "content": "Explain this passage",
-    "thread_id": "existing-thread-id",
-    "passage_context": {
-      "text": "Some highlighted text..."
-    }
-  }'
-```
 
 ## Development
 
 Run with auto-reload:
-
 ```bash
 uvicorn src.main:app --reload --port 8000
 ```

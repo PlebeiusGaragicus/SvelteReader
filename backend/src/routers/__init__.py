@@ -1,9 +1,9 @@
-"""API Routers.
+"""API Routers for AI backend.
 
-Chat functionality now goes directly between frontend and LangGraph.
-This backend handles wallet operations, search proxy, and suggestions.
+Handles search, suggestions, and OCR.
+Payments are in a separate service (payments/).
 """
 
-from src.routers import wallet, search, suggestions
+from src.routers import search, suggestions, ocr
 
-__all__ = ["wallet", "search", "suggestions"]
+__all__ = ["search", "suggestions", "ocr"]
